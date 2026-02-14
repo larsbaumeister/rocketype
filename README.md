@@ -159,14 +159,6 @@ The repository includes several example texts in the `texts/` directory:
   - Words are shown in the order they were first misspelled
   - Count shows how many times each word was mistyped
 
-## Architecture
-
-Built with [tcell](https://github.com/gdamore/tcell) for direct terminal manipulation, providing:
-- Pixel-perfect rendering control
-- Reliable full-screen backgrounds
-- Excellent performance
-- Cross-platform support
-
 ### Adding Custom Texts
 
 Simply create `.txt` files in the `texts/` directory. The application automatically:

@@ -22,6 +22,7 @@ type TextLibrary struct {
 	currentIdx  int    // Index of currently selected text
 	textsDir    string // Directory where text files are stored
 	defaultText TextSource
+	rand        *rand.Rand
 }
 
 const (
@@ -47,6 +48,7 @@ func NewTextLibrary(textsDir string) *TextLibrary {
 		},
 		texts:      make([]TextSource, 0),
 		currentIdx: 0,
+		rand: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
 	// Try to load texts from directory
@@ -59,9 +61,6 @@ func NewTextLibrary(textsDir string) *TextLibrary {
 	if len(tl.texts) == 0 {
 		tl.texts = []TextSource{tl.defaultText}
 	}
-
-	// Seed random number generator for random text selection
-	rand.Seed(time.Now().UnixNano())
 
 	return tl
 }
@@ -128,7 +127,7 @@ func (tl *TextLibrary) SelectRandom() TextSource {
 	if len(tl.texts) == 0 {
 		return tl.defaultText
 	}
-	tl.currentIdx = rand.Intn(len(tl.texts))
+	tl.currentIdx = tl.rand.Intn(len(tl.texts))
 	return tl.GetCurrentText()
 }
 
