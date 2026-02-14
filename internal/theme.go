@@ -93,6 +93,61 @@ var (
 		MenuSelectedFg: tcell.NewRGBColor(220, 215, 186), // #DCD7BA - Soft beige
 		MenuDimText:    tcell.NewRGBColor(114, 113, 105), // #727169 - Muted gray
 	}
+
+	// GruvboxLightTheme is the light variant of Gruvbox with warm, retro-inspired tones.
+	// Features a cream background with earthy accents. Perfect for daytime use.
+	GruvboxLightTheme = Theme{
+		Name:           "gruvbox-light",
+		Background:     tcell.NewRGBColor(251, 241, 199), // #fbf1c7 - Light cream
+		Foreground:     tcell.NewRGBColor(60, 56, 54),    // #3c3836 - Dark brown-gray
+		TextDefault:    tcell.NewRGBColor(189, 174, 147), // #bdae93 - Medium tan
+		TextCorrect:    tcell.NewRGBColor(60, 56, 54),    // #3c3836 - Dark brown-gray
+		TextIncorrect:  tcell.NewRGBColor(204, 36, 29),   // #cc241d - Deep red
+		TextCursor:     tcell.NewRGBColor(181, 118, 20),  // #b57614 - Dark golden
+		Title:          tcell.NewRGBColor(181, 118, 20),  // #b57614 - Dark golden
+		Border:         tcell.NewRGBColor(213, 196, 161), // #d5c4a1 - Light tan
+		Help:           tcell.NewRGBColor(146, 131, 116), // #928374 - Medium gray-brown
+		MenuSelectedBg: tcell.NewRGBColor(235, 219, 178), // #ebdbb2 - Slightly darker cream
+		MenuSelectedFg: tcell.NewRGBColor(60, 56, 54),    // #3c3836 - Dark brown-gray
+		MenuDimText:    tcell.NewRGBColor(189, 174, 147), // #bdae93 - Medium tan
+	}
+
+	// SolarizedLightTheme is based on the precise color relationships of the Solarized
+	// palette by Ethan Schoonover. Features carefully balanced colors with optimal
+	// contrast ratios for reduced eye strain.
+	SolarizedLightTheme = Theme{
+		Name:           "solarized-light",
+		Background:     tcell.NewRGBColor(253, 246, 227), // #fdf6e3 - Base3 (light background)
+		Foreground:     tcell.NewRGBColor(101, 123, 131), // #657b83 - Base00 (body text)
+		TextDefault:    tcell.NewRGBColor(147, 161, 161), // #93a1a1 - Base1 (optional emphasized)
+		TextCorrect:    tcell.NewRGBColor(88, 110, 117),  // #586e75 - Base01 (emphasized)
+		TextIncorrect:  tcell.NewRGBColor(220, 50, 47),   // #dc322f - Red
+		TextCursor:     tcell.NewRGBColor(203, 75, 22),   // #cb4b16 - Orange
+		Title:          tcell.NewRGBColor(181, 137, 0),   // #b58900 - Yellow
+		Border:         tcell.NewRGBColor(238, 232, 213), // #eee8d5 - Base2 (background highlights)
+		Help:           tcell.NewRGBColor(147, 161, 161), // #93a1a1 - Base1
+		MenuSelectedBg: tcell.NewRGBColor(238, 232, 213), // #eee8d5 - Base2
+		MenuSelectedFg: tcell.NewRGBColor(88, 110, 117),  // #586e75 - Base01
+		MenuDimText:    tcell.NewRGBColor(147, 161, 161), // #93a1a1 - Base1
+	}
+
+	// CatppuccinLatteTheme is the light variant of Catppuccin, featuring pastel colors
+	// with a soft, warm latte aesthetic. Modern and pleasing to the eye.
+	CatppuccinLatteTheme = Theme{
+		Name:           "catppuccin-latte",
+		Background:     tcell.NewRGBColor(239, 241, 245), // #eff1f5 - Base
+		Foreground:     tcell.NewRGBColor(76, 79, 105),   // #4c4f69 - Text
+		TextDefault:    tcell.NewRGBColor(156, 160, 176), // #9ca0b0 - Overlay0
+		TextCorrect:    tcell.NewRGBColor(76, 79, 105),   // #4c4f69 - Text
+		TextIncorrect:  tcell.NewRGBColor(210, 15, 57),   // #d20f39 - Red
+		TextCursor:     tcell.NewRGBColor(254, 100, 11),  // #fe640b - Peach
+		Title:          tcell.NewRGBColor(223, 142, 29),  // #df8e1d - Yellow
+		Border:         tcell.NewRGBColor(220, 224, 232), // #dce0e8 - Mantle
+		Help:           tcell.NewRGBColor(140, 143, 161), // #8c8fa1 - Subtext0
+		MenuSelectedBg: tcell.NewRGBColor(204, 208, 218), // #ccd0da - Surface0
+		MenuSelectedFg: tcell.NewRGBColor(76, 79, 105),   // #4c4f69 - Text
+		MenuDimText:    tcell.NewRGBColor(156, 160, 176), // #9ca0b0 - Overlay0
+	}
 )
 
 // AvailableThemes returns all available themes in the order they appear in the theme cycle.
@@ -103,6 +158,9 @@ func AvailableThemes() []Theme {
 		DefaultTheme,
 		GruvboxTheme,
 		KanagawaTheme,
+		GruvboxLightTheme,
+		SolarizedLightTheme,
+		CatppuccinLatteTheme,
 	}
 }
 

@@ -80,10 +80,13 @@ func (r *Renderer) DrawStats(wpm, accuracy float64, theme Theme) {
 
 // TypingViewData contains all data needed to render the typing test view.
 type TypingViewData struct {
-	SampleText string
-	UserInput  string
-	CursorPos  int
-	Theme      Theme
+	SampleText  string
+	SampleRunes []rune // Cached rune slice to avoid repeated conversions
+	UserInput   string
+	UserRunes   []rune // Cached rune slice to avoid repeated conversions
+	CursorPos   int
+	ScrollLine  int // Which wrapped line should be at the top of the viewport
+	Theme       Theme
 }
 
 // DrawTypingView renders the main typing test interface with wrapped text and visual feedback.
@@ -99,15 +102,21 @@ func (r *Renderer) DrawTypingView(data TypingViewData) {
 	// Wrap text to fit screen width
 	lines := wrapText(data.SampleText, maxWidth)
 
-	// Calculate total height needed (2 lines per text line: text + errors above)
-	totalTextHeight := len(lines) * 2
-
-	// Center the text block vertically
+	// Calculate available height for text lines
 	availableHeight := height - 8
-	startY := 5 + (availableHeight-totalTextHeight)/2
-	if startY < 5 {
-		startY = 5
+	maxVisibleLines := availableHeight / 2 // 2 screen rows per text line
+
+	// Adjust scroll position if needed
+	scrollLine := data.ScrollLine
+	if scrollLine < 0 {
+		scrollLine = 0
 	}
+	if scrollLine > len(lines)-1 {
+		scrollLine = len(lines) - 1
+	}
+
+	// Start drawing from top of available area
+	startY := 5
 
 	// Center horizontally by finding the longest line
 	maxLineLen := 0
@@ -128,19 +137,36 @@ func (r *Renderer) DrawTypingView(data TypingViewData) {
 		startX = 2
 	}
 
-	r.drawTypingText(lines, startX, startY, height, data)
+	r.drawTypingText(lines, startX, startY, height, scrollLine, maxVisibleLines, data)
 }
 
 // drawTypingText renders each character of the typing test with appropriate styling.
-func (r *Renderer) drawTypingText(lines []string, startX, startY, height int, data TypingViewData) {
+func (r *Renderer) drawTypingText(lines []string, startX, startY, height, scrollLine, maxVisibleLines int, data TypingViewData) {
 	currentY := startY
 	charIndex := 0
 
-	for _, line := range lines {
+	// Use the cached rune slices from data (no conversion needed!)
+	sampleRunes := data.SampleRunes
+	userRunes := data.UserRunes
+
+	// Calculate the end line to render
+	endLine := scrollLine + maxVisibleLines
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+
+	// Skip characters before scrollLine
+	for lineIdx := 0; lineIdx < scrollLine && lineIdx < len(lines); lineIdx++ {
+		charIndex += len([]rune(lines[lineIdx]))
+	}
+
+	// Render only visible lines
+	for lineIdx := scrollLine; lineIdx < endLine; lineIdx++ {
+		line := lines[lineIdx]
 		currentX := startX
 
 		for _, ch := range line {
-			if charIndex >= len(data.SampleText) {
+			if charIndex >= len(sampleRunes) {
 				break
 			}
 
@@ -148,11 +174,11 @@ func (r *Renderer) drawTypingText(lines []string, startX, startY, height int, da
 				break
 			}
 
-			style, displayChar := r.getCharStyle(charIndex, ch, data)
+			style, displayChar := r.getCharStyle(charIndex, ch, sampleRunes, userRunes, data)
 
 			// Draw mistyped character above if incorrect
-			if charIndex < len(data.UserInput) && data.UserInput[charIndex] != byte(ch) {
-				r.drawMistypedChar(currentX, currentY-1, rune(data.UserInput[charIndex]), data.Theme)
+			if charIndex < len(userRunes) && userRunes[charIndex] != ch {
+				r.drawMistypedChar(currentX, currentY-1, userRunes[charIndex], data.Theme)
 			}
 
 			// Draw the character
@@ -171,13 +197,13 @@ func (r *Renderer) drawTypingText(lines []string, startX, startY, height int, da
 }
 
 // getCharStyle determines the style and display character for a given position.
-func (r *Renderer) getCharStyle(charIndex int, ch rune, data TypingViewData) (tcell.Style, rune) {
+func (r *Renderer) getCharStyle(charIndex int, ch rune, sampleRunes, userRunes []rune, data TypingViewData) (tcell.Style, rune) {
 	displayChar := ch
 	var style tcell.Style
 
-	if charIndex < len(data.UserInput) {
+	if charIndex < len(userRunes) {
 		// Already typed
-		if data.UserInput[charIndex] == byte(ch) {
+		if userRunes[charIndex] == ch {
 			// Correct
 			style = tcell.StyleDefault.Foreground(data.Theme.TextCorrect).Background(data.Theme.Background)
 		} else {
@@ -448,4 +474,54 @@ func wrapText(text string, maxWidth int) []string {
 	}
 
 	return lines
+}
+
+// CalculateCursorLine determines which wrapped line the cursor is on.
+// Returns the line index (0-based) within the wrapped lines.
+func CalculateCursorLine(text string, cursorPos int, maxWidth int) int {
+	if cursorPos < 0 {
+		return 0
+	}
+
+	lines := wrapText(text, maxWidth)
+	charCount := 0
+
+	for lineIdx, line := range lines {
+		lineLen := len([]rune(line))
+		if charCount+lineLen > cursorPos {
+			return lineIdx
+		}
+		charCount += lineLen
+	}
+
+	// Cursor is at or beyond the end
+	if len(lines) > 0 {
+		return len(lines) - 1
+	}
+	return 0
+}
+
+// CalculateScrollLine calculates the optimal scroll line to keep the cursor visible.
+// It tries to keep the cursor in the middle of the viewport when possible.
+func CalculateScrollLine(cursorLine, maxVisibleLines, totalLines int) int {
+	// If all text fits on screen, don't scroll
+	if totalLines <= maxVisibleLines {
+		return 0
+	}
+
+	// Try to keep cursor in the middle third of the viewport
+	desiredCursorPosition := maxVisibleLines / 3
+
+	scrollLine := cursorLine - desiredCursorPosition
+	if scrollLine < 0 {
+		scrollLine = 0
+	}
+
+	// Don't scroll past the end
+	maxScroll := totalLines - maxVisibleLines
+	if scrollLine > maxScroll {
+		scrollLine = maxScroll
+	}
+
+	return scrollLine
 }

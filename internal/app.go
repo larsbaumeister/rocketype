@@ -180,12 +180,42 @@ func (a *App) draw() {
 
 // drawTypingScreen renders the typing test interface.
 func (a *App) drawTypingScreen() {
-	// Draw typing view
+	width, height := a.screen.Size()
+
+	// Calculate text wrapping parameters
+	maxWidth := width - 8
+	if maxWidth < 20 {
+		maxWidth = width
+	}
+
+	// Calculate available height and visible lines
+	availableHeight := height - 8
+	maxVisibleLines := availableHeight / 2 // 2 screen rows per text line
+
+	// Get cached rune slices (no conversion needed!)
+	sampleRunes := a.typingTest.GetSampleRunes()
+	cursorPos := a.typingTest.GetCursorPos()
+
+	// Calculate which line the cursor is on (use string for wrapping)
+	sampleText := a.typingTest.GetSampleText()
+	cursorLine := CalculateCursorLine(sampleText, cursorPos, maxWidth)
+
+	// Calculate total wrapped lines
+	lines := wrapText(sampleText, maxWidth)
+	totalLines := len(lines)
+
+	// Calculate scroll position to keep cursor visible
+	scrollLine := CalculateScrollLine(cursorLine, maxVisibleLines, totalLines)
+
+	// Draw typing view with cached rune slices
 	viewData := TypingViewData{
-		SampleText: a.typingTest.GetSampleText(),
-		UserInput:  a.typingTest.GetUserInput(),
-		CursorPos:  a.typingTest.GetCursorPos(),
-		Theme:      a.theme,
+		SampleText:  sampleText,
+		SampleRunes: sampleRunes,
+		UserInput:   a.typingTest.GetUserInput(),
+		UserRunes:   a.typingTest.GetUserRunes(),
+		CursorPos:   cursorPos,
+		ScrollLine:  scrollLine,
+		Theme:       a.theme,
 	}
 	a.renderer.DrawTypingView(viewData)
 
@@ -275,16 +305,37 @@ func (a *App) initCommands() {
 		},
 		{
 			Name:        "theme: gruvbox",
-			Description: "Switch to gruvbox theme",
+			Description: "Switch to gruvbox theme (dark)",
 			Action: func(app *App) {
 				app.theme = GruvboxTheme
 			},
 		},
 		{
 			Name:        "theme: kanagawa",
-			Description: "Switch to kanagawa theme",
+			Description: "Switch to kanagawa theme (dark)",
 			Action: func(app *App) {
 				app.theme = KanagawaTheme
+			},
+		},
+		{
+			Name:        "theme: gruvbox-light",
+			Description: "Switch to gruvbox light theme",
+			Action: func(app *App) {
+				app.theme = GruvboxLightTheme
+			},
+		},
+		{
+			Name:        "theme: solarized-light",
+			Description: "Switch to solarized light theme",
+			Action: func(app *App) {
+				app.theme = SolarizedLightTheme
+			},
+		},
+		{
+			Name:        "theme: catppuccin-latte",
+			Description: "Switch to catppuccin latte theme (light)",
+			Action: func(app *App) {
+				app.theme = CatppuccinLatteTheme
 			},
 		},
 		{
