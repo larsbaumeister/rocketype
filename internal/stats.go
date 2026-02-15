@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"strings"
 	"time"
 )
 
@@ -107,8 +108,25 @@ func (s *Stats) WordHadError(wordStart int) bool {
 // Parameters:
 //   - word: the word from the sample text that was typed incorrectly
 func (s *Stats) RecordMisspelledWord(word string) {
+	// Trim whitespace from the word
+	word = strings.TrimSpace(word)
+
 	if word == "" {
 		return
+	}
+
+	// Filter out suspicious single-character entries that aren't valid words
+	// Keep "a", "A", "I", "i" as they are valid English words
+	// Filter out other single characters/spaces that might be extraction errors
+	if len(word) == 1 {
+		validSingleChars := map[rune]bool{
+			'a': true, 'A': true,
+			'i': true, 'I': true,
+		}
+		if !validSingleChars[rune(word[0])] {
+			// Skip single characters that aren't valid words
+			return
+		}
 	}
 
 	// Track first occurrence order for consistent display

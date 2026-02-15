@@ -107,7 +107,9 @@ func (r *Renderer) DrawTypingView(data TypingViewData) {
 	width, height := r.screen.Size()
 
 	// Calculate available space for text
-	maxWidth := width - 8
+	// IMPORTANT: This maxWidth calculation must match app.go's calculations
+	// for cursor line and text wrapping to work correctly!
+	maxWidth := width - 20
 	if maxWidth < 20 {
 		maxWidth = width
 	}
@@ -281,6 +283,7 @@ type CommandMenuData struct {
 	Filter           string
 	FilteredCommands []Command
 	Selected         int
+	ScrollOffset     int
 	Theme            Theme
 }
 
@@ -384,9 +387,25 @@ func (r *Renderer) drawCommandList(menuX, menuY, menuWidth, menuHeight int, data
 		return
 	}
 
-	for i := 0; i < maxCommands && i < len(data.FilteredCommands); i++ {
+	// Calculate the visible window based on scroll offset
+	startIdx := data.ScrollOffset
+	endIdx := min(startIdx+maxCommands, len(data.FilteredCommands))
+
+	// Draw scroll indicators if needed
+	if startIdx > 0 {
+		// Show "more above" indicator
+		r.DrawText(menuX+menuWidth-3, menuY+3, "▲", data.Theme.Border, data.Theme.Background)
+	}
+	if endIdx < len(data.FilteredCommands) {
+		// Show "more below" indicator
+		r.DrawText(menuX+menuWidth-3, menuY+menuHeight-2, "▼", data.Theme.Border, data.Theme.Background)
+	}
+
+	// Draw visible commands
+	for i := startIdx; i < endIdx; i++ {
 		cmd := data.FilteredCommands[i]
-		y := startY + i
+		displayIdx := i - startIdx
+		y := startY + displayIdx
 
 		var style tcell.Style
 		if i == data.Selected {
@@ -535,22 +554,33 @@ func CalculateCursorLine(text string, cursorPos int, maxWidth int) int {
 }
 
 // CalculateScrollLine calculates the optimal scroll line to keep the cursor visible.
-// It tries to keep the cursor in the middle of the viewport when possible.
+// It keeps the cursor positioned with space above and below for context.
 func CalculateScrollLine(cursorLine, maxVisibleLines, totalLines int) int {
 	// If all text fits on screen, don't scroll
 	if totalLines <= maxVisibleLines {
 		return 0
 	}
 
-	// Try to keep cursor in the middle third of the viewport
+	// Desired buffer: keep at least 1 line visible below cursor
+	const minBufferBelow = 1
+
+	// Desired position: top third of viewport (gives more context below)
 	desiredCursorPosition := maxVisibleLines / 3
 
+	// But ensure we leave room for the buffer below
+	maxCursorPosition := maxVisibleLines - minBufferBelow - 1
+	if desiredCursorPosition > maxCursorPosition {
+		desiredCursorPosition = maxCursorPosition
+	}
+
+	// Calculate scroll line based on desired cursor position
 	scrollLine := cursorLine - desiredCursorPosition
+
+	// Clamp to valid range [0, maxScroll]
 	if scrollLine < 0 {
 		scrollLine = 0
 	}
 
-	// Don't scroll past the end
 	maxScroll := totalLines - maxVisibleLines
 	if scrollLine > maxScroll {
 		scrollLine = maxScroll

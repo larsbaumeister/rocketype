@@ -87,6 +87,16 @@ func (t *TypingTest) SetSampleText(text string) {
 	t.Reset()
 }
 
+// UpdateSampleText updates the sample text WITHOUT resetting progress.
+// This is used in word mode to dynamically extend the text as the user types.
+// The user's input, cursor position, and stats are preserved.
+func (t *TypingTest) UpdateSampleText(text string) {
+	t.sampleText = text
+	t.sampleRunes = []rune(text)
+	// Note: We intentionally do NOT call Reset() here
+	// This preserves userInput, cursorPos, stats, etc.
+}
+
 // Reset resets the test to initial state, keeping the same sample text.
 func (t *TypingTest) Reset() {
 	t.userInput = ""

@@ -41,6 +41,10 @@ type App struct {
 	wordLimit         int       // Word count limit
 	testStarted       time.Time // When test was started (for time limit)
 	lastCheckPosition int       // Last cursor position when we checked for more words (optimization)
+
+	// Scroll state for text mode
+	currentScrollLine int // Current scroll position (top visible line)
+	lastCursorLine    int // Last calculated cursor line (to detect line changes)
 }
 
 const (
@@ -296,8 +300,17 @@ func (a *App) Run() error {
 			}
 
 		case <-ticker.C:
-			// Periodic redraw for timer updates
-			if a.mode == "words" && a.limitType == "time" && !a.testStarted.IsZero() {
+			// Periodic updates for word mode
+			if a.mode == "words" && !a.testStarted.IsZero() && !a.typingTest.IsFinished() {
+				// Check if time limit reached
+				if a.limitType == "time" {
+					elapsed := time.Since(a.testStarted).Seconds()
+					if elapsed >= float64(a.timeLimit) {
+						a.typingTest.MarkFinished()
+						a.showResults = true
+					}
+				}
+				// Redraw to update timer
 				a.draw()
 			}
 		}
@@ -465,7 +478,8 @@ func (a *App) drawTypingScreen() {
 	width, height := a.screen.Size()
 
 	// Calculate text wrapping parameters
-	maxWidth := width - 8
+	// IMPORTANT: Must match renderer.go maxWidth calculation
+	maxWidth := width - 20
 	if maxWidth < 20 {
 		maxWidth = width
 	}
@@ -494,14 +508,19 @@ func (a *App) drawTypingScreen() {
 	// Calculate scroll position
 	var scrollLine int
 	if a.mode == "words" {
-		// In word mode, scroll so cursor is on the first visible line
-		scrollLine = cursorLine
-		if scrollLine < 0 {
+		// In word mode, keep cursor on middle line (line 1 of 0,1,2) after starting
+		// Start at top (line 0), then stick to middle line as text scrolls
+		const wordModeCursorLine = 1 // Middle line of 3 visible lines
+		if cursorLine < wordModeCursorLine {
+			// At the beginning, show from line 0
 			scrollLine = 0
+		} else {
+			// After reaching middle, keep cursor on middle line and scroll the text
+			scrollLine = cursorLine - wordModeCursorLine
 		}
 	} else {
-		// In text mode, use standard scroll calculation
-		scrollLine = CalculateScrollLine(cursorLine, maxVisibleLines, totalLines)
+		// In text mode, use smooth scrolling that only adjusts when necessary
+		scrollLine = a.calculateSmoothScroll(cursorLine, maxVisibleLines, totalLines)
 	}
 
 	// Draw typing view with cached rune slices
@@ -570,6 +589,7 @@ func (a *App) drawCommandMenuOverlay() {
 		Filter:           a.commandMenu.GetFilter(),
 		FilteredCommands: a.commandMenu.GetFilteredCommands(),
 		Selected:         a.commandMenu.GetSelected(),
+		ScrollOffset:     a.commandMenu.GetScrollOffset(),
 		Theme:            a.theme,
 	}
 	a.renderer.DrawCommandMenu(menuData)
@@ -626,12 +646,74 @@ func (a *App) getLastWordSet() string {
 }
 
 // restartTest resets the current typing test.
+// In word mode, generates a fresh set of random words.
+// In text mode, keeps the same text but resets progress.
 func (a *App) restartTest() {
-	a.typingTest.Reset()
+	// In word mode, generate new random words
+	if a.mode == "words" && a.wordLibrary.HasWordSets() {
+		wordCount := initialWordCount
+		if a.limitType == "words" {
+			wordCount = a.wordLimit * wordLimitMultiplier
+		}
+		content := a.wordLibrary.GenerateRandomWords(wordCount)
+		a.typingTest.SetSampleText(content)
+		a.lastCheckPosition = 0 // Reset check position for new test
+	} else {
+		// In text mode, just reset progress (keep same text)
+		a.typingTest.Reset()
+	}
+
 	a.showResults = false
 	a.testStarted = time.Time{} // Reset timer for word mode
+	// Reset scroll state
+	a.currentScrollLine = 0
+	a.lastCursorLine = 0
 	// Clear saved session when explicitly restarting
 	_ = a.sessionManager.ClearSession()
+}
+
+// calculateSmoothScroll computes scroll position with minimal movement.
+// Scrolls incrementally by single lines to maintain smooth behavior.
+func (a *App) calculateSmoothScroll(cursorLine, maxVisibleLines, totalLines int) int {
+	// If all text fits on screen, don't scroll
+	if totalLines <= maxVisibleLines {
+		a.currentScrollLine = 0
+		a.lastCursorLine = cursorLine
+		return 0
+	}
+
+	// Desired buffer: keep at least 2 lines visible below cursor
+	const minBufferBelow = 2
+
+	// Calculate where cursor would appear in current viewport
+	cursorPosInViewport := cursorLine - a.currentScrollLine
+
+	// Cursor went above viewport - scroll up to show it
+	if cursorPosInViewport < 0 {
+		a.currentScrollLine = cursorLine
+		a.lastCursorLine = cursorLine
+		return a.currentScrollLine
+	}
+
+	// Cursor went below viewport - scroll down to show it
+	if cursorPosInViewport >= maxVisibleLines {
+		a.currentScrollLine = cursorLine - maxVisibleLines + 1
+		a.lastCursorLine = cursorLine
+		return a.currentScrollLine
+	}
+
+	// Cursor is visible but lacks buffer below - scroll down by 1 line
+	if cursorPosInViewport > maxVisibleLines-minBufferBelow-1 {
+		a.currentScrollLine++
+		// Don't scroll past the end
+		maxScroll := totalLines - maxVisibleLines
+		if a.currentScrollLine > maxScroll {
+			a.currentScrollLine = maxScroll
+		}
+	}
+
+	a.lastCursorLine = cursorLine
+	return a.currentScrollLine
 }
 
 // clearSession clears the saved session file and resets text/progress to defaults.
@@ -658,6 +740,9 @@ func (a *App) clearSession() {
 
 	a.showResults = false
 	a.testStarted = time.Time{} // Reset timer
+	// Reset scroll state
+	a.currentScrollLine = 0
+	a.lastCursorLine = 0
 }
 
 // selectRandomText selects a random text and restarts the test.
@@ -666,6 +751,9 @@ func (a *App) selectRandomText() {
 	a.typingTest.SetSampleText(text.Content)
 	a.mode = "text"
 	a.testStarted = time.Time{}
+	// Reset scroll state
+	a.currentScrollLine = 0
+	a.lastCursorLine = 0
 	// Clear saved session when selecting new text
 	_ = a.sessionManager.ClearSession()
 	a.saveAllSettings()
@@ -678,6 +766,9 @@ func (a *App) selectTextByName(name string) {
 		a.typingTest.SetSampleText(text.Content)
 		a.mode = "text"
 		a.testStarted = time.Time{}
+		// Reset scroll state
+		a.currentScrollLine = 0
+		a.lastCursorLine = 0
 		// Clear saved session when selecting new text
 		_ = a.sessionManager.ClearSession()
 		a.saveAllSettings()
@@ -694,6 +785,9 @@ func (a *App) selectWordSet(name string) {
 		a.typingTest.SetSampleText(content)
 		a.testStarted = time.Time{}
 		a.lastCheckPosition = 0 // Reset check position
+		// Reset scroll state
+		a.currentScrollLine = 0
+		a.lastCursorLine = 0
 		_ = a.sessionManager.ClearSession()
 		a.saveAllSettings()
 	}
@@ -712,7 +806,8 @@ func (a *App) ensureEnoughWords() {
 	a.lastCheckPosition = cursorPos
 
 	width, _ := a.screen.Size()
-	maxWidth := width - 8
+	// IMPORTANT: Must match renderer.go maxWidth calculation
+	maxWidth := width - 20
 	if maxWidth < 20 {
 		maxWidth = width
 	}
@@ -736,7 +831,8 @@ func (a *App) ensureEnoughWords() {
 		if newWords != "" {
 			// Append new words to existing text
 			updatedText := sampleText + " " + newWords
-			a.typingTest.SetSampleText(updatedText)
+			// Use UpdateSampleText to preserve typing progress, stats, and cursor position
+			a.typingTest.UpdateSampleText(updatedText)
 		}
 	}
 }
@@ -811,6 +907,94 @@ func (a *App) initCommands() {
 			Description: "Switch to catppuccin latte theme (light)",
 			Action: func(app *App) {
 				app.theme = CatppuccinLatteTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: cyberpunk",
+			Description: "Switch to cyberpunk theme (dark, neon colors)",
+			Action: func(app *App) {
+				app.theme = CyberpunkTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: midnight",
+			Description: "Switch to midnight theme (dark, blue tones)",
+			Action: func(app *App) {
+				app.theme = MidnightTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: ocean-deep",
+			Description: "Switch to ocean deep theme (dark, aqua tones)",
+			Action: func(app *App) {
+				app.theme = OceanDeepTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: dracula",
+			Description: "Switch to dracula theme (dark, purple tones)",
+			Action: func(app *App) {
+				app.theme = DraculaTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: lavender-dream",
+			Description: "Switch to lavender dream theme (light, pastel purple)",
+			Action: func(app *App) {
+				app.theme = LavenderDreamTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: mint-fresh",
+			Description: "Switch to mint fresh theme (light, pastel green)",
+			Action: func(app *App) {
+				app.theme = MintFreshTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: peach-soft",
+			Description: "Switch to peach soft theme (light, warm tones)",
+			Action: func(app *App) {
+				app.theme = PeachSoftTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: rosewater",
+			Description: "Switch to rosewater theme (light, pink tones)",
+			Action: func(app *App) {
+				app.theme = RosewaterTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: high-contrast-dark",
+			Description: "Switch to high contrast dark (black/white)",
+			Action: func(app *App) {
+				app.theme = HighContrastDarkTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: high-contrast-light",
+			Description: "Switch to high contrast light (white/black)",
+			Action: func(app *App) {
+				app.theme = HighContrastLightTheme
+				app.saveThemePreference()
+			},
+		},
+		{
+			Name:        "theme: high-visibility",
+			Description: "Switch to high visibility theme (yellow/black)",
+			Action: func(app *App) {
+				app.theme = HighVisibilityTheme
 				app.saveThemePreference()
 			},
 		},

@@ -2,6 +2,12 @@ package internal
 
 import "strings"
 
+const (
+	// defaultMaxVisibleCommands is the typical number of commands visible in the menu
+	// This matches the default menu height calculation in the renderer
+	defaultMaxVisibleCommands = 10
+)
+
 // Command represents an executable action in the command palette.
 // Commands can be filtered by name or description and executed with a single keystroke.
 type Command struct {
@@ -14,10 +20,11 @@ type Command struct {
 // filtering, selection, and command execution. It provides a keyboard-driven
 // interface for accessing application features.
 type CommandMenu struct {
-	visible  bool      // Whether the command menu is currently displayed
-	filter   string    // Current filter text for searching commands
-	selected int       // Index of currently selected command in filtered list
-	commands []Command // All available commands
+	visible      bool      // Whether the command menu is currently displayed
+	filter       string    // Current filter text for searching commands
+	selected     int       // Index of currently selected command in filtered list
+	scrollOffset int       // Scroll offset for viewing long command lists
+	commands     []Command // All available commands
 }
 
 // NewCommandMenu creates a new CommandMenu instance with default values.
@@ -25,10 +32,11 @@ type CommandMenu struct {
 // Use SetCommands to populate the available commands.
 func NewCommandMenu() *CommandMenu {
 	return &CommandMenu{
-		visible:  false,
-		filter:   "",
-		selected: 0,
-		commands: []Command{},
+		visible:      false,
+		filter:       "",
+		selected:     0,
+		scrollOffset: 0,
+		commands:     []Command{},
 	}
 }
 
@@ -38,6 +46,7 @@ func (cm *CommandMenu) Show() {
 	cm.visible = true
 	cm.filter = ""
 	cm.selected = 0
+	cm.scrollOffset = 0
 }
 
 // Hide closes the command menu and clears any active filter and selection state.
@@ -46,6 +55,7 @@ func (cm *CommandMenu) Hide() {
 	cm.visible = false
 	cm.filter = ""
 	cm.selected = 0
+	cm.scrollOffset = 0
 }
 
 // IsVisible returns whether the command menu is currently displayed.
@@ -70,6 +80,7 @@ func (cm *CommandMenu) SetCommands(commands []Command) {
 func (cm *CommandMenu) AddChar(ch rune) {
 	cm.filter += string(ch)
 	cm.selected = 0 // Reset selection when filter changes
+	cm.scrollOffset = 0
 }
 
 // Backspace removes the last character from the filter string.
@@ -79,6 +90,7 @@ func (cm *CommandMenu) Backspace() {
 	if len(cm.filter) > 0 {
 		cm.filter = cm.filter[:len(cm.filter)-1]
 		cm.selected = 0
+		cm.scrollOffset = 0
 	}
 }
 
@@ -113,18 +125,28 @@ func (cm *CommandMenu) GetFilteredCommands() []Command {
 
 // MoveUp moves the selection cursor up by one position.
 // Does nothing if already at the first item.
+// Adjusts scroll offset if needed to keep selection visible.
 func (cm *CommandMenu) MoveUp() {
 	if cm.selected > 0 {
 		cm.selected--
+		// Scroll up if selection moves above visible window
+		if cm.selected < cm.scrollOffset {
+			cm.scrollOffset = cm.selected
+		}
 	}
 }
 
 // MoveDown moves the selection cursor down by one position.
 // Does nothing if already at the last item in the filtered list.
+// Adjusts scroll offset if needed to keep selection visible.
 func (cm *CommandMenu) MoveDown() {
 	filtered := cm.GetFilteredCommands()
 	if cm.selected < len(filtered)-1 {
 		cm.selected++
+		// Scroll down if selection moves below visible window
+		if cm.selected >= cm.scrollOffset+defaultMaxVisibleCommands {
+			cm.scrollOffset = cm.selected - defaultMaxVisibleCommands + 1
+		}
 	}
 }
 
@@ -132,6 +154,11 @@ func (cm *CommandMenu) MoveDown() {
 // within the filtered command list.
 func (cm *CommandMenu) GetSelected() int {
 	return cm.selected
+}
+
+// GetScrollOffset returns the current scroll offset for rendering.
+func (cm *CommandMenu) GetScrollOffset() int {
+	return cm.scrollOffset
 }
 
 // ExecuteSelected executes the currently selected command and closes the menu.
