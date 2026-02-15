@@ -6,7 +6,7 @@ A fast, minimalist typing test application for the terminal, inspired by [monkey
 
 ## Features
 
-- 🎨 **Multiple Themes** - Choose from default, gruvbox, or kanagawa color schemes
+- 🎨 **Multiple Themes** - Choose from dark and light themes (Gruvbox, Kanagawa, Solarized, Catppuccin)
 - ⚡ **Real-Time Feedback** - Instant visual feedback as you type
 - 📊 **Detailed Statistics** - Track WPM, accuracy, and misspelled words
 - 🎯 **Error Tracking** - Records mistakes even if corrected (true accuracy)
@@ -15,6 +15,8 @@ A fast, minimalist typing test application for the terminal, inspired by [monkey
 - 📝 **Multi-line Support** - Practice with realistic text passages including newlines
 - 📚 **Custom Texts** - Load your own practice texts from .txt files
 - 🔌 **Stdin Support** - Pipe any text directly for instant practice
+- 🌍 **Unicode Support** - Full support for international characters (ö, ä, ü, etc.)
+- 📂 **Platform-Aware** - Uses appropriate default locations for each OS
 
 ## Installation
 
@@ -32,8 +34,28 @@ go build -o rocketype ./cmd/rocketype
 Simply run the application to start typing immediately:
 
 ```bash
+# Use default texts location
 rocketype
+
+# Use custom texts directory
+rocketype --texts-dir ~/my-typing-texts
+
+# Show default paths for your platform
+rocketype --print-paths
+
+# Show help
+rocketype --help
 ```
+
+### Default Text Locations
+
+Rocketype uses platform-appropriate default directories:
+
+- **Linux/BSD**: `~/.config/rocketype/texts/`
+- **macOS**: `~/Library/Application Support/rocketype/texts/`
+- **Windows**: `%APPDATA%\rocketype\texts\`
+
+The directory is created automatically on first run. See [TEXTS.md](TEXTS.md) for detailed configuration.
 
 ### Practice with Custom Text via stdin
 
@@ -82,32 +104,59 @@ When stdin is provided, the piped text becomes the practice text with the name "
 
 ## Themes
 
-### Default
-Respects your terminal's color scheme - adapts to light or dark themes.
+Rocketype includes 6 beautiful themes:
 
-### Gruvbox
-A warm, retro-inspired color scheme with earthy tones. Perfect for extended typing sessions.
+### Dark Themes
+- **Default** - Respects your terminal's color scheme
+- **Gruvbox** - Warm, retro-inspired with earthy tones
+- **Kanagawa** - Inspired by traditional Japanese painting
 
-### Kanagawa
-Inspired by traditional Japanese painting. Features deep, rich colors with excellent contrast.
+### Light Themes
+- **Gruvbox Light** - Warm cream background with earthy accents
+- **Solarized Light** - Scientifically balanced colors for reduced eye strain
+- **Catppuccin Latte** - Modern pastel aesthetic
+
+Switch themes with `Ctrl+T` or via the command palette (`Ctrl+P` → `theme:`).
+
+See [THEMES.md](THEMES.md) for detailed color information and screenshots.
 
 ## Custom Practice Texts
 
-Rocketype supports loading custom typing texts from `.txt` files. This allows you to practice with your own content - code snippets, quotes, technical documentation, or any text you want.
+Rocketype supports loading custom typing texts from `.txt` files.
 
-### Setting Up Custom Texts
+### Quick Start
 
-1. Create a `texts` directory in the same location as the rocketype executable:
+1. Check your default texts directory:
    ```bash
-   mkdir texts
+   rocketype --print-paths
    ```
 
-2. Add `.txt` files with your practice content:
+2. Add `.txt` files to that directory:
    ```bash
-   echo "Your custom text here" > texts/my-practice-text.txt
+   # Linux example
+   echo "Your custom text" > ~/.config/rocketype/texts/my-text.txt
    ```
 
-3. Launch rocketype - it will automatically load all `.txt` files from the `texts` directory
+3. Launch rocketype - it will automatically load your texts!
+
+### Migration from Local Directory
+
+If you have texts in a local `./texts` directory, use the migration script:
+
+```bash
+./migrate-texts.sh
+```
+
+### Detailed Configuration
+
+For comprehensive information about:
+- Platform-specific paths
+- Adding custom texts
+- File naming conventions
+- Sharing text collections
+- Advanced configuration
+
+See **[TEXTS.md](TEXTS.md)** for complete documentation.
 
 ### Text Selection
 
@@ -124,6 +173,8 @@ The repository includes several example texts in the `texts/` directory:
 - `hobbit.txt` - Opening from "The Hobbit" by J.R.R. Tolkien
 - `tale-of-two-cities.txt` - Opening from Dickens
 - `javascript-code.txt` - JavaScript code snippets for programming practice
+
+On first run, these will be available in your platform's default texts directory.
 
 ### Text File Format
 

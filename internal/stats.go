@@ -239,3 +239,52 @@ func (s *Stats) GetMisspelledWords() []string {
 func (s *Stats) GetMisspelledWordCount(word string) int {
 	return s.misspelledWords[word]
 }
+
+// GetStartTime returns the time when the test started.
+// Returns zero time if test hasn't started yet.
+func (s *Stats) GetStartTime() time.Time {
+	return s.startTime
+}
+
+// GetTotalKeystrokes returns the total number of keystrokes recorded.
+func (s *Stats) GetTotalKeystrokes() int {
+	return s.totalKeystrokes
+}
+
+// GetCorrectKeystrokes returns the number of correct keystrokes recorded.
+func (s *Stats) GetCorrectKeystrokes() int {
+	return s.correctKeystrokes
+}
+
+// GetMisspelledWordsMap returns the map of misspelled words and their counts.
+func (s *Stats) GetMisspelledWordsMap() map[string]int {
+	// Return a copy to prevent external modification
+	result := make(map[string]int, len(s.misspelledWords))
+	for k, v := range s.misspelledWords {
+		result[k] = v
+	}
+	return result
+}
+
+// GetWordErrorsMap returns the map of word positions that had errors.
+// Returns as map[int]bool where key is word start position.
+func (s *Stats) GetWordErrorsMap() map[int]bool {
+	// Return a copy to prevent external modification
+	result := make(map[int]bool, len(s.wordHadError))
+	for k, v := range s.wordHadError {
+		result[k] = v
+	}
+	return result
+}
+
+// RestoreFromSession restores stats from saved session data.
+// This allows resuming a typing test with accurate WPM and accuracy tracking.
+func (s *Stats) RestoreFromSession(startTime time.Time, totalKeystrokes, correctKeystrokes int, misspelledWords map[string]int, misspelledOrder []string, wordHadError map[int]bool) {
+	s.startTime = startTime
+	s.totalKeystrokes = totalKeystrokes
+	s.correctKeystrokes = correctKeystrokes
+	s.misspelledWords = misspelledWords
+	s.misspelledOrder = misspelledOrder
+	s.wordHadError = wordHadError
+	s.testComplete = false
+}

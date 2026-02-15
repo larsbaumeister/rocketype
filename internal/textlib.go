@@ -25,11 +25,6 @@ type TextLibrary struct {
 	rand        *rand.Rand
 }
 
-const (
-	// DefaultTextsDir is the default directory for text files.
-	DefaultTextsDir = "texts"
-)
-
 // NewTextLibrary creates a new TextLibrary instance.
 // It loads all .txt files from the specified directory, or uses the default
 // embedded text if the directory doesn't exist or contains no files.
@@ -48,7 +43,7 @@ func NewTextLibrary(textsDir string) *TextLibrary {
 		},
 		texts:      make([]TextSource, 0),
 		currentIdx: 0,
-		rand: rand.New(rand.NewSource(time.Now().UnixNano())),
+		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
 	// Try to load texts from directory

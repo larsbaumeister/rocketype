@@ -1,5 +1,10 @@
 package internal
 
+import (
+	"fmt"
+	"time"
+)
+
 // TypingTest manages the business logic of a typing test session.
 // It handles user input tracking, cursor position, word boundaries,
 // and coordinates with Stats for accuracy and error tracking.
@@ -81,6 +86,92 @@ func (t *TypingTest) Reset() {
 	t.wordStart = 0
 	t.stats = NewStats()
 	t.finished = false
+}
+
+// RestoreState restores the test state from a saved session.
+// This allows resuming a typing test from where the user left off.
+func (t *TypingTest) RestoreState(userInput string, cursorPos int) {
+	t.userInput = userInput
+	t.userRunes = []rune(userInput)
+	t.cursorPos = cursorPos
+
+	// Find the start of the current word by looking backwards for a space or newline
+	t.wordStart = 0
+	for i := cursorPos - 1; i >= 0; i-- {
+		if t.sampleRunes[i] == ' ' || t.sampleRunes[i] == '\n' {
+			t.wordStart = i + 1
+			break
+		}
+	}
+
+	t.finished = false
+	t.stats = NewStats()
+	// Stats will start when user types next character
+}
+
+// GetStatsStartTime returns the start time from stats as an RFC3339 string.
+// Returns empty string if test hasn't started.
+func (t *TypingTest) GetStatsStartTime() string {
+	startTime := t.stats.GetStartTime()
+	if startTime.IsZero() {
+		return ""
+	}
+	return startTime.Format(time.RFC3339)
+}
+
+// GetTotalKeystrokes returns the total keystrokes from stats.
+func (t *TypingTest) GetTotalKeystrokes() int {
+	return t.stats.GetTotalKeystrokes()
+}
+
+// GetCorrectKeystrokes returns the correct keystrokes from stats.
+func (t *TypingTest) GetCorrectKeystrokes() int {
+	return t.stats.GetCorrectKeystrokes()
+}
+
+// GetMisspelledWordsMap returns the misspelled words map from stats.
+func (t *TypingTest) GetMisspelledWordsMap() map[string]int {
+	return t.stats.GetMisspelledWordsMap()
+}
+
+// GetWordErrorsMap returns the word errors map as map[string]int for JSON serialization.
+// Converts map[int]bool to map[string]int.
+func (t *TypingTest) GetWordErrorsMap() map[string]int {
+	wordErrors := t.stats.GetWordErrorsMap()
+	result := make(map[string]int, len(wordErrors))
+	for pos, hadError := range wordErrors {
+		if hadError {
+			result[fmt.Sprintf("%d", pos)] = 1
+		}
+	}
+	return result
+}
+
+// RestoreStatsFromSession restores stats from saved session data.
+func (t *TypingTest) RestoreStatsFromSession(startTimeStr string, totalKeystrokes, correctKeystrokes int, misspelledWords map[string]int, misspelledOrder []string, wordHadErrorMap map[string]int) error {
+	// Parse start time
+	var startTime time.Time
+	var err error
+	if startTimeStr != "" {
+		startTime, err = time.Parse(time.RFC3339, startTimeStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse start time: %w", err)
+		}
+	}
+
+	// Convert wordHadErrorMap from map[string]int to map[int]bool
+	wordHadError := make(map[int]bool)
+	for posStr, val := range wordHadErrorMap {
+		var pos int
+		_, err := fmt.Sscanf(posStr, "%d", &pos)
+		if err == nil && val != 0 {
+			wordHadError[pos] = true
+		}
+	}
+
+	// Restore stats
+	t.stats.RestoreFromSession(startTime, totalKeystrokes, correctKeystrokes, misspelledWords, misspelledOrder, wordHadError)
+	return nil
 }
 
 // TypeCharacter handles typing a regular character.

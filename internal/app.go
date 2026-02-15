@@ -17,11 +17,13 @@ import (
 //   - App coordinates between components and manages state
 type App struct {
 	// Components
-	renderer     *Renderer
-	typingTest   *TypingTest
-	inputHandler *InputHandler
-	commandMenu  *CommandMenu
-	textLibrary  *TextLibrary
+	renderer        *Renderer
+	typingTest      *TypingTest
+	inputHandler    *InputHandler
+	commandMenu     *CommandMenu
+	textLibrary     *TextLibrary
+	sessionManager  *SessionManager
+	settingsManager *SettingsManager
 
 	// State
 	theme       Theme
@@ -39,9 +41,11 @@ const (
 //
 // Parameters:
 //   - stdinText: optional text from stdin (empty string if not provided)
+//   - textsDir: directory path for text files
+//   - restoreSession: whether to attempt to restore a saved session
 //
 // Returns an error if the screen cannot be created or initialized.
-func NewApp(stdinText string) (*App, error) {
+func NewApp(stdinText, textsDir string, restoreSession bool) (*App, error) {
 	screen, err := tcell.NewScreen()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create screen: %w", err)
@@ -51,11 +55,42 @@ func NewApp(stdinText string) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize screen: %w", err)
 	}
 
-	// Load text library
-	textLibrary := NewTextLibrary(DefaultTextsDir)
+	// Initialize session manager
+	sessionManager, err := NewSessionManager()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session manager: %w", err)
+	}
 
-	// Select initial text
+	// Initialize settings manager
+	settingsManager, err := NewSettingsManager()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create settings manager: %w", err)
+	}
+
+	// Load settings (theme, etc.)
+	settings, err := settingsManager.LoadSettings()
+	if err != nil {
+		// If settings load fails, use defaults
+		settings = &Settings{ThemeName: "default"}
+	}
+
+	// Resolve theme from settings
+	initialTheme := DefaultTheme
+	for _, theme := range AvailableThemes() {
+		if theme.Name == settings.ThemeName {
+			initialTheme = theme
+			break
+		}
+	}
+
+	// Load text library
+	textLibrary := NewTextLibrary(textsDir)
+
+	// Try to restore session if requested and available (unless stdin is provided)
 	var initialText TextSource
+	var typingTest *TypingTest
+
+	// stdin text takes precedence over session restoration
 	if stdinText != "" {
 		stdinSource := TextSource{
 			Name:    "stdin",
@@ -65,24 +100,59 @@ func NewApp(stdinText string) (*App, error) {
 		textLibrary.AddText(stdinSource)
 		textLibrary.SelectByName("stdin")
 		initialText = stdinSource
+		typingTest = NewTypingTest(initialText.Content)
+	} else if restoreSession && sessionManager.HasSession() {
+		session, err := sessionManager.LoadSession()
+		if err == nil && session != nil {
+			// Restore from session
+			initialText = TextSource{
+				Name:    session.TextName,
+				Content: session.TextContent,
+				Path:    session.TextPath,
+			}
+
+			// Create typing test with restored state
+			typingTest = NewTypingTest(session.TextContent)
+			// Restore progress
+			typingTest.RestoreState(session.UserInput, session.CursorPos)
+			// Restore stats
+			_ = typingTest.RestoreStatsFromSession(
+				session.StartTime,
+				session.TotalKeystrokes,
+				session.CorrectKeystrokes,
+				session.MisspelledWords,
+				session.MisspelledOrder,
+				session.WordHadError,
+			)
+
+			// Add to library if not already there
+			textLibrary.AddText(initialText)
+		} else {
+			// Session loading failed, use random text
+			initialText = textLibrary.SelectRandom()
+			typingTest = NewTypingTest(initialText.Content)
+		}
 	} else {
+		// No stdin, no session - use random text
 		initialText = textLibrary.SelectRandom()
+		typingTest = NewTypingTest(initialText.Content)
 	}
 
 	// Create components
 	renderer := NewRenderer(screen)
-	typingTest := NewTypingTest(initialText.Content)
 	commandMenu := NewCommandMenu()
 
 	app := &App{
-		renderer:    renderer,
-		typingTest:  typingTest,
-		commandMenu: commandMenu,
-		textLibrary: textLibrary,
-		theme:       DefaultTheme,
-		screen:      screen,
-		quit:        false,
-		showResults: false,
+		renderer:        renderer,
+		typingTest:      typingTest,
+		commandMenu:     commandMenu,
+		textLibrary:     textLibrary,
+		sessionManager:  sessionManager,
+		settingsManager: settingsManager,
+		theme:           initialTheme,
+		screen:          screen,
+		quit:            false,
+		showResults:     false,
 	}
 
 	// Initialize input handler with callbacks
@@ -120,6 +190,41 @@ func (a *App) Run() error {
 			a.draw()
 		}
 	}
+
+	// Handle session and settings on quit
+	if a.typingTest.IsFinished() {
+		// Test is finished - clear any saved session
+		_ = a.sessionManager.ClearSession()
+	} else if a.typingTest.GetCursorPos() > 0 {
+		// Test in progress - save session with stats
+		currentText := a.textLibrary.GetCurrentText()
+		stats := a.typingTest.GetStats()
+
+		session := Session{
+			TextName:          currentText.Name,
+			TextContent:       a.typingTest.GetSampleText(),
+			TextPath:          currentText.Path,
+			UserInput:         a.typingTest.GetUserInput(),
+			CursorPos:         a.typingTest.GetCursorPos(),
+			StartTime:         a.typingTest.GetStatsStartTime(),
+			TotalKeystrokes:   a.typingTest.GetTotalKeystrokes(),
+			CorrectKeystrokes: a.typingTest.GetCorrectKeystrokes(),
+			MisspelledWords:   a.typingTest.GetMisspelledWordsMap(),
+			MisspelledOrder:   stats.GetMisspelledWords(),
+			WordHadError:      a.typingTest.GetWordErrorsMap(),
+		}
+		err := a.sessionManager.SaveSession(session)
+		if err != nil {
+			// Log error but don't fail the quit
+			_ = err
+		}
+	}
+
+	// Always save settings (theme preference persists regardless of session state)
+	settings := Settings{
+		ThemeName: a.theme.Name,
+	}
+	_ = a.settingsManager.SaveSettings(settings)
 
 	return nil
 }
@@ -268,14 +373,40 @@ func (a *App) toggleCommandMenu() {
 	}
 }
 
-// cycleTheme switches to the next theme.
+// cycleTheme switches to the next theme and saves the preference.
 func (a *App) cycleTheme() {
 	a.theme = GetNextTheme(a.theme)
+	a.saveThemePreference()
+}
+
+// saveThemePreference saves the current theme to settings.
+func (a *App) saveThemePreference() {
+	settings := Settings{
+		ThemeName: a.theme.Name,
+	}
+	_ = a.settingsManager.SaveSettings(settings)
 }
 
 // restartTest resets the current typing test.
 func (a *App) restartTest() {
 	a.typingTest.Reset()
+	a.showResults = false
+	// Clear saved session when explicitly restarting
+	_ = a.sessionManager.ClearSession()
+}
+
+// clearSession clears the saved session file and resets text/progress to defaults.
+// Non-text-related settings like theme are preserved.
+func (a *App) clearSession() {
+	if err := a.sessionManager.ClearSession(); err != nil {
+		// In a real app you might want to show an error message
+		_ = err
+	}
+
+	// Reset to a fresh test with random text
+	// Theme and other preferences are preserved
+	text := a.textLibrary.SelectRandom()
+	a.typingTest.SetSampleText(text.Content)
 	a.showResults = false
 }
 
@@ -283,6 +414,8 @@ func (a *App) restartTest() {
 func (a *App) selectRandomText() {
 	text := a.textLibrary.SelectRandom()
 	a.typingTest.SetSampleText(text.Content)
+	// Clear saved session when selecting new text
+	_ = a.sessionManager.ClearSession()
 }
 
 // selectTextByName selects a text by name and restarts the test.
@@ -290,6 +423,8 @@ func (a *App) selectTextByName(name string) {
 	if a.textLibrary.SelectByName(name) {
 		text := a.textLibrary.GetCurrentText()
 		a.typingTest.SetSampleText(text.Content)
+		// Clear saved session when selecting new text
+		_ = a.sessionManager.ClearSession()
 	}
 }
 
@@ -301,6 +436,7 @@ func (a *App) initCommands() {
 			Description: "Switch to default terminal theme",
 			Action: func(app *App) {
 				app.theme = DefaultTheme
+				app.saveThemePreference()
 			},
 		},
 		{
@@ -308,6 +444,7 @@ func (a *App) initCommands() {
 			Description: "Switch to gruvbox theme (dark)",
 			Action: func(app *App) {
 				app.theme = GruvboxTheme
+				app.saveThemePreference()
 			},
 		},
 		{
@@ -315,6 +452,7 @@ func (a *App) initCommands() {
 			Description: "Switch to kanagawa theme (dark)",
 			Action: func(app *App) {
 				app.theme = KanagawaTheme
+				app.saveThemePreference()
 			},
 		},
 		{
@@ -322,6 +460,7 @@ func (a *App) initCommands() {
 			Description: "Switch to gruvbox light theme",
 			Action: func(app *App) {
 				app.theme = GruvboxLightTheme
+				app.saveThemePreference()
 			},
 		},
 		{
@@ -329,6 +468,7 @@ func (a *App) initCommands() {
 			Description: "Switch to solarized light theme",
 			Action: func(app *App) {
 				app.theme = SolarizedLightTheme
+				app.saveThemePreference()
 			},
 		},
 		{
@@ -336,6 +476,7 @@ func (a *App) initCommands() {
 			Description: "Switch to catppuccin latte theme (light)",
 			Action: func(app *App) {
 				app.theme = CatppuccinLatteTheme
+				app.saveThemePreference()
 			},
 		},
 		{
@@ -350,6 +491,13 @@ func (a *App) initCommands() {
 			Description: "Restart the typing test with current text",
 			Action: func(app *App) {
 				app.restartTest()
+			},
+		},
+		{
+			Name:        "clear session",
+			Description: "Clear saved session and start fresh",
+			Action: func(app *App) {
+				app.clearSession()
 			},
 		},
 		{
