@@ -55,9 +55,14 @@ func (r *Renderer) DrawText(x, y int, text string, fg, bg tcell.Color) {
 }
 
 // DrawTitle renders the title bar with theme and text information.
-func (r *Renderer) DrawTitle(themeName, textName string, theme Theme) {
+func (r *Renderer) DrawTitle(themeName, textName, modeInfo string, theme Theme) {
 	width, _ := r.screen.Size()
-	title := fmt.Sprintf("rocketype [%s] - %s", themeName, textName)
+	var title string
+	if modeInfo != "" {
+		title = fmt.Sprintf("rocketype [%s] - %s (%s)", themeName, textName, modeInfo)
+	} else {
+		title = fmt.Sprintf("rocketype [%s] - %s", themeName, textName)
+	}
 	x := width/2 - len(title)/2
 	r.DrawText(x, 2, title, theme.Title, theme.Background)
 }
@@ -78,6 +83,13 @@ func (r *Renderer) DrawStats(wpm, accuracy float64, theme Theme) {
 	r.DrawText(x, height-3, statsText, theme.Help, theme.Background)
 }
 
+// DrawProgress renders progress information (timer or word count) above stats.
+func (r *Renderer) DrawProgress(progressText string, theme Theme) {
+	width, height := r.screen.Size()
+	x := width/2 - len(progressText)/2
+	r.DrawText(x, height-4, progressText, theme.Help, theme.Background)
+}
+
 // TypingViewData contains all data needed to render the typing test view.
 type TypingViewData struct {
 	SampleText  string
@@ -87,6 +99,7 @@ type TypingViewData struct {
 	CursorPos   int
 	ScrollLine  int // Which wrapped line should be at the top of the viewport
 	Theme       Theme
+	WordMode    bool // True if in word mode (shows only 2 lines below cursor)
 }
 
 // DrawTypingView renders the main typing test interface with wrapped text and visual feedback.
@@ -106,6 +119,13 @@ func (r *Renderer) DrawTypingView(data TypingViewData) {
 	availableHeight := height - 8
 	maxVisibleLines := availableHeight / 2 // 2 screen rows per text line
 
+	// In word mode, only show 3 lines (cursor line + 2 below)
+	// This constant should match wordModeVisibleLines in app.go
+	const wordModeVisibleLines = 3
+	if data.WordMode {
+		maxVisibleLines = wordModeVisibleLines
+	}
+
 	// Adjust scroll position if needed
 	scrollLine := data.ScrollLine
 	if scrollLine < 0 {
@@ -115,8 +135,21 @@ func (r *Renderer) DrawTypingView(data TypingViewData) {
 		scrollLine = len(lines) - 1
 	}
 
-	// Start drawing from top of available area
-	startY := 5
+	// Calculate how many lines will actually be rendered
+	endLine := scrollLine + maxVisibleLines
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+	visibleLineCount := endLine - scrollLine
+
+	// Calculate vertical centering
+	// Each line takes 2 rows (text + space), calculate total height needed
+	contentHeight := visibleLineCount * 2
+	// Center the content vertically in available space
+	startY := (height - contentHeight) / 2
+	if startY < 4 {
+		startY = 4 // Keep minimum spacing from top
+	}
 
 	// Center horizontally by finding the longest line
 	maxLineLen := 0

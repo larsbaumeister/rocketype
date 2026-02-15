@@ -2,6 +2,8 @@ package internal
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -22,6 +24,7 @@ type App struct {
 	inputHandler    *InputHandler
 	commandMenu     *CommandMenu
 	textLibrary     *TextLibrary
+	wordLibrary     *WordLibrary
 	sessionManager  *SessionManager
 	settingsManager *SettingsManager
 
@@ -30,11 +33,28 @@ type App struct {
 	screen      tcell.Screen
 	quit        bool
 	showResults bool
+
+	// Mode settings
+	mode              string    // "text" or "words"
+	limitType         string    // "time" or "words"
+	timeLimit         int       // Time limit in seconds
+	wordLimit         int       // Word count limit
+	testStarted       time.Time // When test was started (for time limit)
+	lastCheckPosition int       // Last cursor position when we checked for more words (optimization)
 }
 
 const (
 	// defaultSampleText is the fallback text when no texts directory exists.
 	defaultSampleText = "Roads go ever ever on,\nOver rock and under tree,\nBy caves where never sun has shone,\nBy streams that never find the sea;\nOver snow by winter sown,\nAnd through the merry flowers of June,\nOver grass and over stone,\nAnd under mountains in the moon."
+
+	// Word mode constants
+	initialWordCount        = 100 // Initial words generated when entering word mode
+	wordGenerationChunk     = 50  // Number of words to generate when buffer runs low
+	wordModeVisibleLines    = 3   // Number of lines visible in word mode (cursor + 2 below)
+	wordModeLinesThreshold  = 3   // Minimum lines remaining before generating more words
+	timerUpdateIntervalMS   = 100 // Timer update interval in milliseconds
+	wordLimitMultiplier     = 2   // Multiplier for initial word generation in word limit mode
+	lastCheckPositionOffset = 10  // Don't check for more words until cursor advances by this many characters
 )
 
 // NewApp creates a new application instance and initializes all components.
@@ -86,11 +106,18 @@ func NewApp(stdinText, textsDir string, restoreSession bool) (*App, error) {
 	// Load text library
 	textLibrary := NewTextLibrary(textsDir)
 
+	// Load word library
+	wordsDir, err := GetDefaultWordsDir()
+	if err != nil {
+		wordsDir = GetFallbackWordsDir()
+	}
+	wordLibrary := NewWordLibrary(wordsDir)
+
 	// Try to restore session if requested and available (unless stdin is provided)
 	var initialText TextSource
 	var typingTest *TypingTest
 
-	// stdin text takes precedence over session restoration
+	// stdin text takes precedence over session restoration, always text mode
 	if stdinText != "" {
 		stdinSource := TextSource{
 			Name:    "stdin",
@@ -101,6 +128,7 @@ func NewApp(stdinText, textsDir string, restoreSession bool) (*App, error) {
 		textLibrary.SelectByName("stdin")
 		initialText = stdinSource
 		typingTest = NewTypingTest(initialText.Content)
+		settings.Mode = "text" // Force text mode for stdin
 	} else if restoreSession && sessionManager.HasSession() {
 		session, err := sessionManager.LoadSession()
 		if err == nil && session != nil {
@@ -128,14 +156,54 @@ func NewApp(stdinText, textsDir string, restoreSession bool) (*App, error) {
 			// Add to library if not already there
 			textLibrary.AddText(initialText)
 		} else {
-			// Session loading failed, use random text
+			// Session loading failed, initialize based on mode
+			if settings.Mode == "words" && wordLibrary.HasWordSets() {
+				// Word mode - generate random words
+				if settings.LastWordSet != "" {
+					wordLibrary.SelectByName(settings.LastWordSet)
+				}
+				wordCount := initialWordCount
+				if settings.LimitType == "words" {
+					wordCount = settings.WordLimit * wordLimitMultiplier
+				}
+				content := wordLibrary.GenerateRandomWords(wordCount)
+				initialText = TextSource{
+					Name:    "Random Words",
+					Content: content,
+					Path:    "",
+				}
+				typingTest = NewTypingTest(content)
+			} else {
+				// Text mode - use random text
+				settings.Mode = "text"
+				initialText = textLibrary.SelectRandom()
+				typingTest = NewTypingTest(initialText.Content)
+			}
+		}
+	} else {
+		// No stdin, no session - initialize based on mode
+		if settings.Mode == "words" && wordLibrary.HasWordSets() {
+			// Word mode - generate random words
+			if settings.LastWordSet != "" {
+				wordLibrary.SelectByName(settings.LastWordSet)
+			}
+			wordCount := initialWordCount
+			if settings.LimitType == "words" {
+				wordCount = settings.WordLimit * wordLimitMultiplier
+			}
+			content := wordLibrary.GenerateRandomWords(wordCount)
+			initialText = TextSource{
+				Name:    "Random Words",
+				Content: content,
+				Path:    "",
+			}
+			typingTest = NewTypingTest(content)
+		} else {
+			// Text mode - use random text
+			settings.Mode = "text"
 			initialText = textLibrary.SelectRandom()
 			typingTest = NewTypingTest(initialText.Content)
 		}
-	} else {
-		// No stdin, no session - use random text
-		initialText = textLibrary.SelectRandom()
-		typingTest = NewTypingTest(initialText.Content)
 	}
 
 	// Create components
@@ -147,12 +215,18 @@ func NewApp(stdinText, textsDir string, restoreSession bool) (*App, error) {
 		typingTest:      typingTest,
 		commandMenu:     commandMenu,
 		textLibrary:     textLibrary,
+		wordLibrary:     wordLibrary,
 		sessionManager:  sessionManager,
 		settingsManager: settingsManager,
 		theme:           initialTheme,
 		screen:          screen,
 		quit:            false,
 		showResults:     false,
+		mode:            settings.Mode,
+		limitType:       settings.LimitType,
+		timeLimit:       settings.TimeLimit,
+		wordLimit:       settings.WordLimit,
+		testStarted:     time.Time{}, // Will be set when typing starts
 	}
 
 	// Initialize input handler with callbacks
@@ -178,18 +252,59 @@ func (a *App) Run() error {
 
 	a.draw()
 
-	for !a.quit {
-		ev := a.screen.PollEvent()
-		switch ev := ev.(type) {
-		case *tcell.EventResize:
-			a.screen.Sync()
-			a.draw()
+	// Start a ticker for updating the display (e.g., timer countdown)
+	ticker := time.NewTicker(timerUpdateIntervalMS * time.Millisecond)
+	defer ticker.Stop()
 
-		case *tcell.EventKey:
-			a.handleKey(ev)
-			a.draw()
+	// Channel for screen events
+	eventChan := make(chan tcell.Event)
+	quitEventLoop := make(chan struct{})
+
+	// Start event polling goroutine
+	go func() {
+		defer close(eventChan)
+		for {
+			select {
+			case <-quitEventLoop:
+				return
+			default:
+				ev := a.screen.PollEvent()
+				select {
+				case eventChan <- ev:
+				case <-quitEventLoop:
+					return
+				}
+			}
+		}
+	}()
+
+	for !a.quit {
+		select {
+		case ev, ok := <-eventChan:
+			if !ok {
+				// Event channel closed, exit
+				return nil
+			}
+			switch ev := ev.(type) {
+			case *tcell.EventResize:
+				a.screen.Sync()
+				a.draw()
+
+			case *tcell.EventKey:
+				a.handleKey(ev)
+				a.draw()
+			}
+
+		case <-ticker.C:
+			// Periodic redraw for timer updates
+			if a.mode == "words" && a.limitType == "time" && !a.testStarted.IsZero() {
+				a.draw()
+			}
 		}
 	}
+
+	// Signal the event polling goroutine to stop
+	close(quitEventLoop)
 
 	// Handle session and settings on quit
 	if a.typingTest.IsFinished() {
@@ -220,9 +335,20 @@ func (a *App) Run() error {
 		}
 	}
 
-	// Always save settings (theme preference persists regardless of session state)
+	// Always save settings (theme preference and mode settings persist)
+	currentWordSet := ""
+	if a.mode == "words" {
+		wordSet := a.wordLibrary.GetCurrentWordSet()
+		currentWordSet = wordSet.Name
+	}
+
 	settings := Settings{
-		ThemeName: a.theme.Name,
+		ThemeName:   a.theme.Name,
+		Mode:        a.mode,
+		LimitType:   a.limitType,
+		TimeLimit:   a.timeLimit,
+		WordLimit:   a.wordLimit,
+		LastWordSet: currentWordSet,
 	}
 	_ = a.settingsManager.SaveSettings(settings)
 
@@ -241,6 +367,41 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	}
 
 	a.inputHandler.HandleKey(ev, mode)
+
+	// Track test start time for word mode limits
+	if mode == ModeTyping && a.mode == "words" && a.testStarted.IsZero() && a.typingTest.GetCursorPos() > 0 {
+		a.testStarted = time.Now()
+	}
+
+	// Dynamically extend text in word mode if needed
+	if mode == ModeTyping && a.mode == "words" {
+		a.ensureEnoughWords()
+	}
+
+	// Check limits in word mode
+	if a.mode == "words" && !a.typingTest.IsFinished() {
+		limitReached := false
+
+		if a.limitType == "time" && !a.testStarted.IsZero() {
+			elapsed := time.Since(a.testStarted).Seconds()
+			if elapsed >= float64(a.timeLimit) {
+				limitReached = true
+			}
+		} else if a.limitType == "words" {
+			// Count words typed by splitting user input
+			userInput := a.typingTest.GetUserInput()
+			wordCount := len(strings.Fields(userInput))
+			if wordCount >= a.wordLimit {
+				limitReached = true
+			}
+		}
+
+		if limitReached {
+			// Mark test as finished
+			a.typingTest.GetStats().Finish()
+			a.showResults = true
+		}
+	}
 
 	// Update results state after input
 	if a.typingTest.IsFinished() {
@@ -264,9 +425,25 @@ func (a *App) draw() {
 	a.renderer.Clear()
 	a.renderer.FillBackground(a.theme.Background)
 
-	// Draw title
-	currentText := a.textLibrary.GetCurrentText()
-	a.renderer.DrawTitle(a.theme.Name, currentText.Name, a.theme)
+	// Draw title with mode information
+	var textName string
+	var modeInfo string
+
+	if a.mode == "words" {
+		wordSet := a.wordLibrary.GetCurrentWordSet()
+		textName = wordSet.Name
+		if a.limitType == "time" {
+			modeInfo = fmt.Sprintf("words mode, %ds", a.timeLimit)
+		} else {
+			modeInfo = fmt.Sprintf("words mode, %d words", a.wordLimit)
+		}
+	} else {
+		currentText := a.textLibrary.GetCurrentText()
+		textName = currentText.Name
+		modeInfo = ""
+	}
+
+	a.renderer.DrawTitle(a.theme.Name, textName, modeInfo, a.theme)
 
 	// Draw main content
 	if a.showResults {
@@ -297,6 +474,11 @@ func (a *App) drawTypingScreen() {
 	availableHeight := height - 8
 	maxVisibleLines := availableHeight / 2 // 2 screen rows per text line
 
+	// In word mode, only show 2 lines below cursor
+	if a.mode == "words" {
+		maxVisibleLines = wordModeVisibleLines // cursor line + 2 lines below
+	}
+
 	// Get cached rune slices (no conversion needed!)
 	sampleRunes := a.typingTest.GetSampleRunes()
 	cursorPos := a.typingTest.GetCursorPos()
@@ -309,8 +491,18 @@ func (a *App) drawTypingScreen() {
 	lines := wrapText(sampleText, maxWidth)
 	totalLines := len(lines)
 
-	// Calculate scroll position to keep cursor visible
-	scrollLine := CalculateScrollLine(cursorLine, maxVisibleLines, totalLines)
+	// Calculate scroll position
+	var scrollLine int
+	if a.mode == "words" {
+		// In word mode, scroll so cursor is on the first visible line
+		scrollLine = cursorLine
+		if scrollLine < 0 {
+			scrollLine = 0
+		}
+	} else {
+		// In text mode, use standard scroll calculation
+		scrollLine = CalculateScrollLine(cursorLine, maxVisibleLines, totalLines)
+	}
 
 	// Draw typing view with cached rune slices
 	viewData := TypingViewData{
@@ -321,12 +513,31 @@ func (a *App) drawTypingScreen() {
 		CursorPos:   cursorPos,
 		ScrollLine:  scrollLine,
 		Theme:       a.theme,
+		WordMode:    a.mode == "words",
 	}
 	a.renderer.DrawTypingView(viewData)
 
 	// Draw stats
 	stats := a.typingTest.GetStats()
 	a.renderer.DrawStats(stats.GetWPM(), stats.GetAccuracy(), a.theme)
+
+	// Draw progress for word mode
+	if a.mode == "words" && !a.testStarted.IsZero() {
+		var progressText string
+		if a.limitType == "time" {
+			elapsed := time.Since(a.testStarted).Seconds()
+			remaining := float64(a.timeLimit) - elapsed
+			if remaining < 0 {
+				remaining = 0
+			}
+			progressText = fmt.Sprintf("Time: %.1fs", remaining)
+		} else {
+			// Count words typed
+			wordsTyped := len(strings.Fields(a.typingTest.GetUserInput()))
+			progressText = fmt.Sprintf("Words: %d / %d", wordsTyped, a.wordLimit)
+		}
+		a.renderer.DrawProgress(progressText, a.theme)
+	}
 
 	// Draw help text
 	a.renderer.DrawHelpText(a.theme)
@@ -382,40 +593,82 @@ func (a *App) cycleTheme() {
 // saveThemePreference saves the current theme to settings.
 func (a *App) saveThemePreference() {
 	settings := Settings{
-		ThemeName: a.theme.Name,
+		ThemeName:   a.theme.Name,
+		Mode:        a.mode,
+		LimitType:   a.limitType,
+		TimeLimit:   a.timeLimit,
+		WordLimit:   a.wordLimit,
+		LastWordSet: a.getLastWordSet(),
 	}
 	_ = a.settingsManager.SaveSettings(settings)
+}
+
+// saveAllSettings saves all current settings including theme, mode, and limits.
+func (a *App) saveAllSettings() {
+	settings := Settings{
+		ThemeName:   a.theme.Name,
+		Mode:        a.mode,
+		LimitType:   a.limitType,
+		TimeLimit:   a.timeLimit,
+		WordLimit:   a.wordLimit,
+		LastWordSet: a.getLastWordSet(),
+	}
+	_ = a.settingsManager.SaveSettings(settings)
+}
+
+// getLastWordSet returns the current word set name or empty string.
+func (a *App) getLastWordSet() string {
+	if a.mode == "words" {
+		wordSet := a.wordLibrary.GetCurrentWordSet()
+		return wordSet.Name
+	}
+	return ""
 }
 
 // restartTest resets the current typing test.
 func (a *App) restartTest() {
 	a.typingTest.Reset()
 	a.showResults = false
+	a.testStarted = time.Time{} // Reset timer for word mode
 	// Clear saved session when explicitly restarting
 	_ = a.sessionManager.ClearSession()
 }
 
 // clearSession clears the saved session file and resets text/progress to defaults.
-// Non-text-related settings like theme are preserved.
+// Non-text-related settings like theme and mode are preserved.
 func (a *App) clearSession() {
 	if err := a.sessionManager.ClearSession(); err != nil {
-		// In a real app you might want to show an error message
 		_ = err
 	}
 
-	// Reset to a fresh test with random text
-	// Theme and other preferences are preserved
-	text := a.textLibrary.SelectRandom()
-	a.typingTest.SetSampleText(text.Content)
+	// Reset based on current mode
+	if a.mode == "words" && a.wordLibrary.HasWordSets() {
+		// Generate new random words
+		wordCount := initialWordCount
+		if a.limitType == "words" {
+			wordCount = a.wordLimit * wordLimitMultiplier
+		}
+		content := a.wordLibrary.GenerateRandomWords(wordCount)
+		a.typingTest.SetSampleText(content)
+	} else {
+		// Select random text
+		text := a.textLibrary.SelectRandom()
+		a.typingTest.SetSampleText(text.Content)
+	}
+
 	a.showResults = false
+	a.testStarted = time.Time{} // Reset timer
 }
 
 // selectRandomText selects a random text and restarts the test.
 func (a *App) selectRandomText() {
 	text := a.textLibrary.SelectRandom()
 	a.typingTest.SetSampleText(text.Content)
+	a.mode = "text"
+	a.testStarted = time.Time{}
 	// Clear saved session when selecting new text
 	_ = a.sessionManager.ClearSession()
+	a.saveAllSettings()
 }
 
 // selectTextByName selects a text by name and restarts the test.
@@ -423,9 +676,91 @@ func (a *App) selectTextByName(name string) {
 	if a.textLibrary.SelectByName(name) {
 		text := a.textLibrary.GetCurrentText()
 		a.typingTest.SetSampleText(text.Content)
+		a.mode = "text"
+		a.testStarted = time.Time{}
 		// Clear saved session when selecting new text
 		_ = a.sessionManager.ClearSession()
+		a.saveAllSettings()
 	}
+}
+
+// selectWordSet selects a word set and generates random words.
+func (a *App) selectWordSet(name string) {
+	if a.wordLibrary.SelectByName(name) {
+		a.mode = "words"
+		// Start with a reasonable initial amount of words
+		// We'll dynamically generate more as the user types
+		content := a.wordLibrary.GenerateRandomWords(initialWordCount)
+		a.typingTest.SetSampleText(content)
+		a.testStarted = time.Time{}
+		a.lastCheckPosition = 0 // Reset check position
+		_ = a.sessionManager.ClearSession()
+		a.saveAllSettings()
+	}
+}
+
+// ensureEnoughWords checks if there's enough text ahead of the cursor and generates more if needed.
+// This ensures the user always has at least 2 lines of text visible below the cursor.
+// Optimized to only check periodically (not on every keystroke) for performance.
+func (a *App) ensureEnoughWords() {
+	cursorPos := a.typingTest.GetCursorPos()
+
+	// Performance optimization: only check when cursor advances significantly
+	if cursorPos < a.lastCheckPosition+lastCheckPositionOffset {
+		return
+	}
+	a.lastCheckPosition = cursorPos
+
+	width, _ := a.screen.Size()
+	maxWidth := width - 8
+	if maxWidth < 20 {
+		maxWidth = width
+	}
+
+	sampleText := a.typingTest.GetSampleText()
+
+	// Calculate how much text remains after cursor
+	remainingText := ""
+	sampleRunes := []rune(sampleText)
+	if cursorPos < len(sampleRunes) {
+		remainingText = string(sampleRunes[cursorPos:])
+	}
+
+	// Wrap remaining text to see how many lines are left
+	remainingLines := wrapText(remainingText, maxWidth)
+
+	// If less than threshold lines remaining, generate more words
+	if len(remainingLines) < wordModeLinesThreshold {
+		// Generate a chunk of new words
+		newWords := a.wordLibrary.GenerateRandomWords(wordGenerationChunk)
+		if newWords != "" {
+			// Append new words to existing text
+			updatedText := sampleText + " " + newWords
+			a.typingTest.SetSampleText(updatedText)
+		}
+	}
+}
+
+// setTimeLimit sets the time limit in seconds and switches to time-based limit.
+func (a *App) setTimeLimit(seconds int) {
+	a.timeLimit = seconds
+	a.limitType = "time"
+	a.saveAllSettings()
+}
+
+// setWordLimit sets the word count limit and switches to word-based limit.
+func (a *App) setWordLimit(words int) {
+	a.wordLimit = words
+	a.limitType = "words"
+	// If already in word mode, regenerate text with appropriate word count
+	if a.mode == "words" {
+		wordCount := words * wordLimitMultiplier
+		content := a.wordLibrary.GenerateRandomWords(wordCount)
+		a.typingTest.SetSampleText(content)
+		a.testStarted = time.Time{}
+		a.lastCheckPosition = 0 // Reset check position
+	}
+	a.saveAllSettings()
 }
 
 // initCommands initializes the command palette with all available commands.
@@ -520,6 +855,64 @@ func (a *App) initCommands() {
 			},
 		})
 	}
+
+	// Add commands for each available word set
+	for _, wordSet := range a.wordLibrary.GetAllWordSets() {
+		wordSetName := wordSet.Name
+		commands = append(commands, Command{
+			Name:        fmt.Sprintf("words: %s", wordSetName),
+			Description: fmt.Sprintf("Practice random words from '%s'", wordSetName),
+			Action: func(app *App) {
+				app.selectWordSet(wordSetName)
+			},
+		})
+	}
+
+	// Add time limit commands (automatically switches to time-based limit)
+	commands = append(commands, Command{
+		Name:        "limit: 30 seconds",
+		Description: "Set time limit to 30 seconds",
+		Action: func(app *App) {
+			app.setTimeLimit(30)
+		},
+	})
+	commands = append(commands, Command{
+		Name:        "limit: 60 seconds",
+		Description: "Set time limit to 60 seconds",
+		Action: func(app *App) {
+			app.setTimeLimit(60)
+		},
+	})
+	commands = append(commands, Command{
+		Name:        "limit: 120 seconds",
+		Description: "Set time limit to 120 seconds",
+		Action: func(app *App) {
+			app.setTimeLimit(120)
+		},
+	})
+
+	// Add word limit commands (automatically switches to word-based limit)
+	commands = append(commands, Command{
+		Name:        "limit: 50 words",
+		Description: "Set word limit to 50 words",
+		Action: func(app *App) {
+			app.setWordLimit(50)
+		},
+	})
+	commands = append(commands, Command{
+		Name:        "limit: 100 words",
+		Description: "Set word limit to 100 words",
+		Action: func(app *App) {
+			app.setWordLimit(100)
+		},
+	})
+	commands = append(commands, Command{
+		Name:        "limit: 200 words",
+		Description: "Set word limit to 200 words",
+		Action: func(app *App) {
+			app.setWordLimit(200)
+		},
+	})
 
 	a.commandMenu.SetCommands(commands)
 }

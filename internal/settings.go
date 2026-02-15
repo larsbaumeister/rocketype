@@ -11,7 +11,15 @@ import (
 // These settings are preserved even when clearing session data.
 type Settings struct {
 	ThemeName string `json:"theme_name"` // Current theme preference
-	// Future: could add other preferences like default text directory, etc.
+
+	// Mode settings
+	Mode string `json:"mode"` // "text" or "words"
+
+	// Word mode settings
+	LimitType   string `json:"limit_type"`    // "time" or "words"
+	TimeLimit   int    `json:"time_limit"`    // Time limit in seconds (default: 60)
+	WordLimit   int    `json:"word_limit"`    // Word count limit (default: 50)
+	LastWordSet string `json:"last_word_set"` // Last selected word set name
 }
 
 // SettingsManager handles saving and loading user settings.
@@ -57,7 +65,12 @@ func (sm *SettingsManager) LoadSettings() (*Settings, error) {
 	if _, err := os.Stat(sm.settingsPath); os.IsNotExist(err) {
 		// Return default settings
 		return &Settings{
-			ThemeName: "default",
+			ThemeName:   "default",
+			Mode:        "text",
+			LimitType:   "time",
+			TimeLimit:   60,
+			WordLimit:   50,
+			LastWordSet: "",
 		}, nil
 	}
 
@@ -71,6 +84,20 @@ func (sm *SettingsManager) LoadSettings() (*Settings, error) {
 	var settings Settings
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal settings: %w", err)
+	}
+
+	// Apply defaults for any missing fields
+	if settings.Mode == "" {
+		settings.Mode = "text"
+	}
+	if settings.LimitType == "" {
+		settings.LimitType = "time"
+	}
+	if settings.TimeLimit == 0 {
+		settings.TimeLimit = 60
+	}
+	if settings.WordLimit == 0 {
+		settings.WordLimit = 50
 	}
 
 	return &settings, nil
