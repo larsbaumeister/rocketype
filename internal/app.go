@@ -397,8 +397,8 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		}
 
 		if limitReached {
-			// Mark test as finished
-			a.typingTest.GetStats().Finish()
+			// Mark test as finished and show results
+			a.typingTest.MarkFinished()
 			a.showResults = true
 		}
 	}

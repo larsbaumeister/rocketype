@@ -71,6 +71,15 @@ func (t *TypingTest) IsFinished() bool {
 	return t.finished
 }
 
+// MarkFinished marks the test as complete and finalizes stats.
+// This should be called when ending the test early (e.g., time/word limit reached in word mode).
+func (t *TypingTest) MarkFinished() {
+	if !t.finished {
+		t.stats.Finish()
+		t.finished = true
+	}
+}
+
 // SetSampleText updates the sample text and resets the test.
 func (t *TypingTest) SetSampleText(text string) {
 	t.sampleText = text
