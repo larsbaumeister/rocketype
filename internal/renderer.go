@@ -636,8 +636,17 @@ func CalculateScrollLine(cursorLine, maxVisibleLines, totalLines int) int {
 	return scrollLine
 }
 
+const (
+	wpmIncrement       = 25 // Y-axis label increment
+	yAxisLabelWidth    = 4  // Width of Y-axis labels
+	yAxisPadding       = 2  // Padding between Y-axis labels and graph
+	graphHeightPadding = 3  // Space for title and X-axis
+	brailleDotsWidth   = 2  // Braille character width in dots
+	brailleDotsHeight  = 4  // Braille character height in dots
+)
+
 // drawWPMGraph renders a timeline graph of WPM changes over time.
-// The graph uses ASCII characters to draw a line chart showing typing speed progression.
+// The graph uses braille characters to draw a smooth line chart showing typing speed progression.
 //
 // Parameters:
 //   - x, y: top-left position of the graph
@@ -650,6 +659,11 @@ func (r *Renderer) drawWPMGraph(x, y, width, height int, history []WPMSnapshot, 
 		return
 	}
 
+	// Calculate time range for the entire graph
+	startTime := history[0].Timestamp
+	endTime := history[len(history)-1].Timestamp
+	totalDuration := endTime.Sub(startTime).Seconds()
+
 	// Find max WPM for scaling
 	maxWPM := history[0].WPM
 	for _, snapshot := range history {
@@ -658,11 +672,11 @@ func (r *Renderer) drawWPMGraph(x, y, width, height int, history []WPMSnapshot, 
 		}
 	}
 
-	// Always start at 0 and round up to nearest 25 WPM increment
+	// Always start at 0 and round up to nearest wpmIncrement
 	minWPM := 0.0
-	maxWPM = float64(int(maxWPM/25)+1) * 25
-	if maxWPM < 25 {
-		maxWPM = 25
+	maxWPM = float64(int(maxWPM/wpmIncrement)+1) * wpmIncrement
+	if maxWPM < wpmIncrement {
+		maxWPM = wpmIncrement
 	}
 
 	// Draw title
@@ -671,14 +685,14 @@ func (r *Renderer) drawWPMGraph(x, y, width, height int, history []WPMSnapshot, 
 	r.DrawText(titleX, y, title, theme.Title, theme.Background)
 	y++ // Move down after title
 
-	graphHeight := height - 3 // Reserve space for title, Y-axis labels, and X-axis
-	graphWidth := width - 7   // Reserve space for Y-axis labels (4 chars + 3 space)
+	graphHeight := height - graphHeightPadding
+	graphWidth := width - (yAxisLabelWidth + yAxisPadding + 1)
 
-	// Draw Y-axis labels at every 25 WPM increment
-	numLabels := int(maxWPM/25) + 1 // Number of labels from 0 to maxWPM
+	// Draw Y-axis labels at every wpmIncrement
+	numLabels := int(maxWPM/wpmIncrement) + 1
 	for i := 0; i < numLabels; i++ {
-		wpmValue := float64(i) * 25
-		label := fmt.Sprintf("%4.0f", wpmValue) // Right-align with width of 4
+		wpmValue := float64(i) * wpmIncrement
+		label := fmt.Sprintf("%*.0f", yAxisLabelWidth, wpmValue) // Right-align
 
 		// Calculate Y position for this label (inverted)
 		normalized := (wpmValue - minWPM) / (maxWPM - minWPM)
@@ -688,7 +702,7 @@ func (r *Renderer) drawWPMGraph(x, y, width, height int, history []WPMSnapshot, 
 	}
 
 	// Starting position for graph content
-	graphX := x + 6 // Y-axis labels are 4 chars + 2 space padding
+	graphX := x + yAxisLabelWidth + yAxisPadding
 	graphY := y
 
 	// Initialize graph area with spaces
@@ -723,80 +737,40 @@ func (r *Renderer) drawWPMGraph(x, y, width, height int, history []WPMSnapshot, 
 		points[i] = graphHeight - 1 - int(normalized*float64(graphHeight-1))
 	}
 
-	// Draw graph using braille characters for smooth lines
-	lineStyle := tcell.StyleDefault.Foreground(theme.TextCorrect).Background(theme.Background).Bold(true)
+	// Draw the graph using braille characters
+	r.drawBrailleLine(graphX, graphY, graphWidth, graphHeight, points, theme.TextCorrect, theme.Background)
 
-	// Helper function for absolute value
-	abs := func(n int) int {
-		if n < 0 {
-			return -n
-		}
-		return n
-	}
+	// Draw error markers
+	r.drawErrorMarkers(graphX, graphY, graphWidth, graphHeight, totalDuration, startTime, errorTimestamps, theme)
+
+	// Draw X-axis with time labels
+	r.drawTimeAxisLabels(graphX, graphY, graphWidth, graphHeight, totalDuration, theme)
+}
+
+// drawBrailleLine draws a smooth line through the given points using braille characters.
+func (r *Renderer) drawBrailleLine(graphX, graphY, graphWidth, graphHeight int, points []int, fg, bg tcell.Color) {
+	lineStyle := tcell.StyleDefault.Foreground(fg).Background(bg).Bold(true)
 
 	// Braille characters are 2 dots wide by 4 dots tall
-	// We need braille grid that matches our graphWidth and graphHeight
-	brailleWidth := graphWidth   // Number of braille characters horizontally
-	brailleHeight := graphHeight // Number of braille characters vertically
+	brailleWidth := graphWidth
+	brailleHeight := graphHeight
 	brailleGrid := make([][]uint8, brailleHeight)
 	for i := range brailleGrid {
 		brailleGrid[i] = make([]uint8, brailleWidth)
 	}
 
-	// Map each point to braille grid with 2x4 sub-pixel precision
+	// Map each point to braille grid with sub-pixel precision
 	for i := 0; i < len(points)-1; i++ {
-		// Points array has one entry per character column
-		// Scale to 2x width (braille horizontal resolution) and 4x height (braille vertical resolution)
-		x1, y1 := i*2, points[i]*4
-		x2, y2 := (i+1)*2, points[i+1]*4
+		// Scale to braille sub-pixel resolution
+		x1, y1 := i*brailleDotsWidth, points[i]*brailleDotsHeight
+		x2, y2 := (i+1)*brailleDotsWidth, points[i+1]*brailleDotsHeight
 
-		// Draw line segment between consecutive points using Bresenham's algorithm
-		dx := abs(x2 - x1)
-		dy := abs(y2 - y1)
-		sx := 1
-		if x1 > x2 {
-			sx = -1
-		}
-		sy := 1
-		if y1 > y2 {
-			sy = -1
-		}
-		err := dx - dy
-
-		x, y := x1, y1
-		for {
-			// Convert sub-pixel coordinates to braille cell and dot position
-			cellX := x / 2
-			cellY := y / 4
-			dotX := x % 2 // 0 or 1 (left or right dot in braille cell)
-			dotY := y % 4 // 0-3 (which row of dots in braille cell)
-
-			// Set braille dot if within grid bounds
-			if cellX >= 0 && cellX < brailleWidth && cellY >= 0 && cellY < brailleHeight {
-				// Braille dot pattern: dots are numbered 0-7
-				// Left column: 0,1,2,3 (top to bottom), Right column: 4,5,6,7 (top to bottom)
-				dotIndex := dotX*4 + dotY
-				brailleGrid[cellY][cellX] |= (1 << dotIndex)
-			}
-
-			if x == x2 && y == y2 {
-				break
-			}
-
-			e2 := 2 * err
-			if e2 > -dy {
-				err -= dy
-				x += sx
-			}
-			if e2 < dx {
-				err += dx
-				y += sy
-			}
-		}
+		// Draw line segment using Bresenham's algorithm
+		drawBrailleLineSegment(brailleGrid, brailleWidth, brailleHeight, x1, y1, x2, y2)
 	}
 
-	// Convert braille grid to unicode braille characters and render
-	brailleBase := rune(0x2800) // Unicode braille pattern base
+	// Render braille characters
+	brailleBase := rune(0x2800)
 	for cellY := 0; cellY < brailleHeight; cellY++ {
 		for cellX := 0; cellX < brailleWidth; cellX++ {
 			if brailleGrid[cellY][cellX] != 0 {
@@ -805,85 +779,135 @@ func (r *Renderer) drawWPMGraph(x, y, width, height int, history []WPMSnapshot, 
 			}
 		}
 	}
+}
 
-	// Draw error markers
-	if len(history) > 0 && len(errorTimestamps) > 0 {
-		startTime := history[0].Timestamp
-		endTime := history[len(history)-1].Timestamp
-		totalDuration := endTime.Sub(startTime).Seconds()
+// drawBrailleLineSegment draws a line segment in the braille grid using Bresenham's algorithm.
+func drawBrailleLineSegment(grid [][]uint8, width, height, x1, y1, x2, y2 int) {
+	dx := abs(x2 - x1)
+	dy := abs(y2 - y1)
+	sx := 1
+	if x1 > x2 {
+		sx = -1
+	}
+	sy := 1
+	if y1 > y2 {
+		sy = -1
+	}
+	err := dx - dy
 
-		if totalDuration > 0 {
-			errorStyle := tcell.StyleDefault.Foreground(theme.TextIncorrect).Background(theme.Background)
+	x, y := x1, y1
+	for {
+		// Convert sub-pixel coordinates to braille cell and dot position
+		cellX := x / brailleDotsWidth
+		cellY := y / brailleDotsHeight
+		dotX := x % brailleDotsWidth
+		dotY := y % brailleDotsHeight
 
-			for _, errorTime := range errorTimestamps {
-				// Calculate time offset from start
-				errorOffset := errorTime.Sub(startTime).Seconds()
+		// Set braille dot if within bounds
+		if cellX >= 0 && cellX < width && cellY >= 0 && cellY < height {
+			// Braille dot pattern: left column 0-3, right column 4-7
+			dotIndex := dotX*brailleDotsHeight + dotY
+			grid[cellY][cellX] |= (1 << dotIndex)
+		}
 
-				// Skip errors outside the graph range
-				if errorOffset < 0 || errorOffset > totalDuration {
-					continue
-				}
+		if x == x2 && y == y2 {
+			break
+		}
 
-				// Calculate X position for this error
-				normalized := errorOffset / totalDuration
-				errorX := graphX + int(normalized*float64(graphWidth-1))
-
-				// Draw error marker at the bottom of the graph
-				r.screen.SetContent(errorX, graphY+graphHeight-1, '×', nil, errorStyle)
-			}
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			x += sx
+		}
+		if e2 < dx {
+			err += dx
+			y += sy
 		}
 	}
+}
 
-	// Draw X-axis with time labels
-	if len(history) > 0 {
-		// Calculate total duration in seconds
-		totalDuration := history[len(history)-1].Timestamp.Sub(history[0].Timestamp).Seconds()
-
-		// Draw X-axis time labels
-		xAxisY := graphY + graphHeight + 1
-
-		// Determine time interval for labels based on duration
-		var interval float64
-		if totalDuration <= 30 {
-			interval = 5 // Every 5 seconds for short tests
-		} else if totalDuration <= 60 {
-			interval = 10 // Every 10 seconds for medium tests
-		} else if totalDuration <= 120 {
-			interval = 15 // Every 15 seconds for longer tests
-		} else {
-			interval = 30 // Every 30 seconds for very long tests
-		}
-
-		// Draw time labels
-		for t := 0.0; t <= totalDuration; t += interval {
-			// Calculate X position for this time
-			normalized := t / totalDuration
-			labelX := graphX + int(normalized*float64(graphWidth-1))
-
-			// Format time label
-			var timeLabel string
-			if t >= 60 {
-				minutes := int(t / 60)
-				seconds := int(t) % 60
-				if seconds == 0 {
-					timeLabel = fmt.Sprintf("%dm", minutes)
-				} else {
-					timeLabel = fmt.Sprintf("%dm%ds", minutes, seconds)
-				}
-			} else {
-				timeLabel = fmt.Sprintf("%.0fs", t)
-			}
-
-			// Center the label on the tick mark
-			labelX -= len(timeLabel) / 2
-			if labelX < graphX {
-				labelX = graphX
-			}
-			if labelX+len(timeLabel) > graphX+graphWidth {
-				labelX = graphX + graphWidth - len(timeLabel)
-			}
-
-			r.DrawText(labelX, xAxisY, timeLabel, theme.Help, theme.Background)
-		}
+// drawErrorMarkers renders error markers (×) at the bottom of the graph.
+func (r *Renderer) drawErrorMarkers(graphX, graphY, graphWidth, graphHeight int, totalDuration float64, startTime time.Time, errorTimestamps []time.Time, theme Theme) {
+	if totalDuration <= 0 || len(errorTimestamps) == 0 {
+		return
 	}
+
+	errorStyle := tcell.StyleDefault.Foreground(theme.TextIncorrect).Background(theme.Background)
+
+	for _, errorTime := range errorTimestamps {
+		// Calculate time offset from start
+		errorOffset := errorTime.Sub(startTime).Seconds()
+
+		// Skip errors outside the graph range
+		if errorOffset < 0 || errorOffset > totalDuration {
+			continue
+		}
+
+		// Calculate X position for this error
+		normalized := errorOffset / totalDuration
+		errorX := graphX + int(normalized*float64(graphWidth-1))
+
+		// Draw error marker at the bottom of the graph
+		r.screen.SetContent(errorX, graphY+graphHeight-1, '×', nil, errorStyle)
+	}
+}
+
+// drawTimeAxisLabels draws time labels below the X-axis.
+func (r *Renderer) drawTimeAxisLabels(graphX, graphY, graphWidth, graphHeight int, totalDuration float64, theme Theme) {
+	xAxisY := graphY + graphHeight + 1
+
+	// Determine time interval for labels based on duration
+	var interval float64
+	switch {
+	case totalDuration <= 30:
+		interval = 5
+	case totalDuration <= 60:
+		interval = 10
+	case totalDuration <= 120:
+		interval = 15
+	default:
+		interval = 30
+	}
+
+	// Draw time labels
+	for t := 0.0; t <= totalDuration; t += interval {
+		// Calculate X position for this time
+		normalized := t / totalDuration
+		labelX := graphX + int(normalized*float64(graphWidth-1))
+
+		// Format time label
+		timeLabel := formatTimeLabel(t)
+
+		// Center the label on the tick mark
+		labelX -= len(timeLabel) / 2
+		if labelX < graphX {
+			labelX = graphX
+		}
+		if labelX+len(timeLabel) > graphX+graphWidth {
+			labelX = graphX + graphWidth - len(timeLabel)
+		}
+
+		r.DrawText(labelX, xAxisY, timeLabel, theme.Help, theme.Background)
+	}
+}
+
+// formatTimeLabel formats seconds into a readable time string.
+func formatTimeLabel(seconds float64) string {
+	if seconds >= 60 {
+		minutes := int(seconds / 60)
+		secs := int(seconds) % 60
+		if secs == 0 {
+			return fmt.Sprintf("%dm", minutes)
+		}
+		return fmt.Sprintf("%dm%ds", minutes, secs)
+	}
+	return fmt.Sprintf("%.0fs", seconds)
+}
+
+// abs returns the absolute value of an integer.
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
