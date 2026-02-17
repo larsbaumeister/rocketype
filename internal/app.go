@@ -580,6 +580,8 @@ func (a *App) drawResultsScreen() {
 		Accuracy:        stats.GetAccuracy(),
 		MisspelledWords: misspelledWords,
 		WordCounts:      wordCounts,
+		WPMHistory:      stats.GetWPMHistory(),
+		ErrorTimestamps: stats.GetErrorTimestamps(),
 		Theme:           a.theme,
 	}
 	a.renderer.DrawResults(resultsData)

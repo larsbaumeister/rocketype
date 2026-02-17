@@ -11,6 +11,18 @@ const (
 	CharsPerWord = 5.0
 )
 
+// WPMSnapshot represents a WPM measurement at a specific time.
+type WPMSnapshot struct {
+	Timestamp time.Time // When this measurement was taken
+	WPM       float64   // Words per minute at this point
+}
+
+// keystrokeEvent records a single keystroke with its timestamp.
+type keystrokeEvent struct {
+	timestamp time.Time
+	correct   bool
+}
+
 // Stats tracks typing test statistics including timing, accuracy, and error tracking.
 // It maintains detailed information about keystrokes, misspelled words, and test progress.
 //
@@ -26,7 +38,17 @@ type Stats struct {
 	totalKeystrokes   int
 	correctKeystrokes int
 
-	// Word-level error tracking
+	// Instantaneous WPM tracking
+	keystrokeEvents  []keystrokeEvent // Recent keystrokes with timestamps
+	instantWindowSec float64          // Time window for instantaneous WPM (e.g., 3 seconds)
+
+	// WPM timeline tracking
+	wpmHistory          []WPMSnapshot // Historical WPM measurements
+	lastSnapshotTime    time.Time     // Last time we took a snapshot
+	snapshotIntervalSec float64       // Seconds between snapshots
+
+	// Error tracking
+	errorTimestamps []time.Time    // Timestamps of when errors occurred
 	misspelledWords map[string]int // Maps word to count of times misspelled
 	misspelledOrder []string       // Maintains insertion order of misspelled words
 
@@ -42,10 +64,15 @@ type Stats struct {
 // Returns a pointer to a Stats struct ready for tracking typing test metrics.
 func NewStats() *Stats {
 	return &Stats{
-		misspelledWords:  make(map[string]int),
-		wordHadError:     make(map[int]bool),
-		currentWordStart: 0,
-		testComplete:     false,
+		misspelledWords:     make(map[string]int),
+		wordHadError:        make(map[int]bool),
+		currentWordStart:    0,
+		testComplete:        false,
+		wpmHistory:          make([]WPMSnapshot, 0, 60),      // Pre-allocate for ~60 seconds
+		errorTimestamps:     make([]time.Time, 0, 100),       // Pre-allocate for typical errors
+		snapshotIntervalSec: 1.0,                             // Take snapshot every second
+		keystrokeEvents:     make([]keystrokeEvent, 0, 1000), // Pre-allocate for typical keystrokes
+		instantWindowSec:    3.0,                             // 3-second rolling window
 	}
 }
 
@@ -72,6 +99,7 @@ func (s *Stats) IsComplete() bool {
 
 // RecordKeystroke records a single keystroke and tracks whether it was correct.
 // This method updates both total keystroke count and correct keystroke count.
+// It also updates the WPM timeline at regular intervals.
 //
 // Parameters:
 //   - correct: true if the typed character matches the expected character
@@ -79,7 +107,23 @@ func (s *Stats) RecordKeystroke(correct bool) {
 	s.totalKeystrokes++
 	if correct {
 		s.correctKeystrokes++
+	} else {
+		// Record timestamp of error
+		if !s.startTime.IsZero() {
+			s.errorTimestamps = append(s.errorTimestamps, time.Now())
+		}
 	}
+
+	// Record keystroke event with timestamp for instantaneous WPM
+	if !s.startTime.IsZero() {
+		s.keystrokeEvents = append(s.keystrokeEvents, keystrokeEvent{
+			timestamp: time.Now(),
+			correct:   correct,
+		})
+	}
+
+	// Update WPM timeline
+	s.updateWPMTimeline()
 }
 
 // MarkCurrentWordAsError marks that the word starting at the given position has an error.
@@ -108,10 +152,21 @@ func (s *Stats) WordHadError(wordStart int) bool {
 // Parameters:
 //   - word: the word from the sample text that was typed incorrectly
 func (s *Stats) RecordMisspelledWord(word string) {
-	// Trim whitespace from the word
+	// Trim all whitespace (spaces, tabs, newlines) from the word
 	word = strings.TrimSpace(word)
 
 	if word == "" {
+		return
+	}
+
+	// If the word contains newlines or multiple spaces, it was incorrectly captured
+	// Split it into individual words and record each separately
+	if strings.ContainsAny(word, "\n\r\t") || strings.Contains(word, "  ") {
+		// Split on whitespace and record each word separately
+		words := strings.Fields(word)
+		for _, w := range words {
+			s.RecordMisspelledWord(w) // Recursive call with cleaned word
+		}
 		return
 	}
 
@@ -292,6 +347,95 @@ func (s *Stats) GetWordErrorsMap() map[int]bool {
 	for k, v := range s.wordHadError {
 		result[k] = v
 	}
+	return result
+}
+
+// getInstantaneousWPM calculates WPM based on keystrokes in the last N seconds.
+// This gives a real-time measure of typing speed that drops to 0 when typing stops.
+func (s *Stats) getInstantaneousWPM() float64 {
+	if s.startTime.IsZero() || len(s.keystrokeEvents) == 0 {
+		return 0
+	}
+
+	now := time.Now()
+	cutoffTime := now.Add(-time.Duration(s.instantWindowSec * float64(time.Second)))
+
+	// Count correct keystrokes in the rolling window
+	correctInWindow := 0
+	for i := len(s.keystrokeEvents) - 1; i >= 0; i-- {
+		event := s.keystrokeEvents[i]
+		if event.timestamp.Before(cutoffTime) {
+			break // Events are chronological, so we can stop
+		}
+		if event.correct {
+			correctInWindow++
+		}
+	}
+
+	// Calculate WPM from keystrokes in window
+	words := float64(correctInWindow) / CharsPerWord
+	minutes := s.instantWindowSec / 60.0
+
+	return words / minutes
+}
+
+// updateWPMTimeline takes a WPM snapshot if enough time has elapsed since the last snapshot.
+// This is called automatically by RecordKeystroke.
+func (s *Stats) updateWPMTimeline() {
+	if s.startTime.IsZero() {
+		return
+	}
+
+	now := time.Now()
+
+	// Initialize last snapshot time if this is the first call
+	if s.lastSnapshotTime.IsZero() {
+		s.lastSnapshotTime = s.startTime
+	}
+
+	// Check if enough time has passed for a new snapshot
+	elapsed := now.Sub(s.lastSnapshotTime).Seconds()
+	if elapsed >= s.snapshotIntervalSec {
+		// Calculate instantaneous WPM for the graph
+		currentWPM := s.getInstantaneousWPM()
+
+		// Add snapshot
+		s.wpmHistory = append(s.wpmHistory, WPMSnapshot{
+			Timestamp: now,
+			WPM:       currentWPM,
+		})
+
+		s.lastSnapshotTime = now
+
+		// Clean up old keystroke events to prevent unbounded growth
+		// Keep events from the last 10 seconds for cleanup
+		cleanupCutoff := now.Add(-10 * time.Second)
+		firstValidIdx := 0
+		for i, event := range s.keystrokeEvents {
+			if !event.timestamp.Before(cleanupCutoff) {
+				firstValidIdx = i
+				break
+			}
+		}
+		if firstValidIdx > 0 {
+			s.keystrokeEvents = s.keystrokeEvents[firstValidIdx:]
+		}
+	}
+}
+
+// GetWPMHistory returns a copy of the WPM history for timeline display.
+func (s *Stats) GetWPMHistory() []WPMSnapshot {
+	// Return a copy to prevent external modification
+	result := make([]WPMSnapshot, len(s.wpmHistory))
+	copy(result, s.wpmHistory)
+	return result
+}
+
+// GetErrorTimestamps returns a copy of the error timestamps for visualization.
+func (s *Stats) GetErrorTimestamps() []time.Time {
+	// Return a copy to prevent external modification
+	result := make([]time.Time, len(s.errorTimestamps))
+	copy(result, s.errorTimestamps)
 	return result
 }
 

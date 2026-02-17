@@ -217,10 +217,23 @@ func (t *TypingTest) TypeCharacter(typedChar rune) bool {
 	t.userRunes = append(t.userRunes, typedChar)
 	t.cursorPos++
 
-	// Handle word boundary (space completes a word)
-	if typedChar == ' ' && t.wordStart < t.cursorPos-1 {
-		t.finishWord(t.cursorPos - 1)
-		t.wordStart = t.cursorPos
+	// Update word boundary based on EXPECTED text (sample text), not typed text
+	// This ensures we track words correctly even if user types wrong characters
+	if t.cursorPos < len(t.sampleRunes) {
+		// Check if we just crossed a word boundary in the sample text
+		prevChar := t.sampleRunes[t.cursorPos-1]
+		if prevChar == ' ' || prevChar == '\n' || prevChar == '\t' {
+			// We just typed over a space/newline in the sample - finish the previous word
+			if t.wordStart < t.cursorPos-1 {
+				t.finishWord(t.cursorPos - 1)
+			}
+			t.wordStart = t.cursorPos
+		}
+	} else {
+		// We're at the end of the text - finish the last word
+		if t.wordStart < t.cursorPos {
+			t.finishWord(t.cursorPos)
+		}
 	}
 
 	t.checkCompletion()
@@ -252,11 +265,16 @@ func (t *TypingTest) TypeNewline() bool {
 	t.userRunes = append(t.userRunes, '\n')
 	t.cursorPos++
 
-	// Newline acts as word boundary
-	if t.wordStart < t.cursorPos-1 {
-		t.finishWord(t.cursorPos - 1)
+	// Update word boundary - newline in sample text acts as word boundary
+	if t.cursorPos < len(t.sampleRunes) {
+		prevChar := t.sampleRunes[t.cursorPos-1]
+		if prevChar == '\n' || prevChar == ' ' || prevChar == '\t' {
+			if t.wordStart < t.cursorPos-1 {
+				t.finishWord(t.cursorPos - 1)
+			}
+			t.wordStart = t.cursorPos
+		}
 	}
-	t.wordStart = t.cursorPos
 
 	t.checkCompletion()
 	return true
@@ -296,14 +314,43 @@ func (t *TypingTest) finishWord(wordEnd int) {
 // checkCompletion checks if the test is complete and finalizes stats.
 func (t *TypingTest) checkCompletion() {
 	if t.cursorPos >= len(t.sampleRunes) {
-		// Record last word if it had errors
-		if t.wordStart < len(t.sampleRunes) {
-			if t.stats.WordHadError(t.wordStart) {
-				word := string(t.sampleRunes[t.wordStart:])
-				t.stats.RecordMisspelledWord(word)
-			}
-		}
+		// Record ALL words that had errors, not just the current one
+		// This handles cases where user typed through multiple words without spaces
+		t.recordAllMisspelledWords()
+
 		t.stats.Finish()
 		t.finished = true
+	}
+}
+
+// recordAllMisspelledWords scans through all words in the sample text and records
+// any that were marked as having errors. This ensures that all misspelled words
+// are captured, even if the user didn't type spaces between them.
+func (t *TypingTest) recordAllMisspelledWords() {
+	wordStart := -1
+
+	for i := 0; i <= len(t.sampleRunes); i++ {
+		var currentChar rune
+		if i < len(t.sampleRunes) {
+			currentChar = t.sampleRunes[i]
+		}
+
+		// Check if current character is a word separator (space, newline, tab)
+		isWordSeparator := i == len(t.sampleRunes) ||
+			currentChar == ' ' ||
+			currentChar == '\n' ||
+			currentChar == '\t'
+
+		if !isWordSeparator && wordStart == -1 {
+			// Start of a new word
+			wordStart = i
+		} else if isWordSeparator && wordStart != -1 {
+			// End of a word - record it if it had errors
+			if t.stats.WordHadError(wordStart) {
+				word := string(t.sampleRunes[wordStart:i])
+				t.stats.RecordMisspelledWord(word)
+			}
+			wordStart = -1
+		}
 	}
 }

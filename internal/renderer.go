@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -308,6 +309,8 @@ type ResultsData struct {
 	Accuracy        float64
 	MisspelledWords []string
 	WordCounts      map[string]int
+	WPMHistory      []WPMSnapshot // Timeline of WPM measurements
+	ErrorTimestamps []time.Time   // Timestamps when errors occurred
 	Theme           Theme
 }
 
@@ -315,8 +318,9 @@ type ResultsData struct {
 func (r *Renderer) DrawResults(data ResultsData) {
 	width, height := r.screen.Size()
 
-	boxWidth := min(width*3/4, 70)
-	boxHeight := min(height*3/4, 25)
+	// Make box larger to accommodate taller graph
+	boxWidth := min(width*4/5, 80)
+	boxHeight := min(height*4/5, 45)
 	boxX := (width - boxWidth) / 2
 	boxY := (height - boxHeight) / 2
 
@@ -439,7 +443,7 @@ func (r *Renderer) drawNoResults(menuX, menuWidth, startY int, theme Theme) {
 	r.DrawText(noResultsX, startY+2, noResults, theme.MenuDimText, theme.Background)
 }
 
-// drawResultsContent draws the statistics and misspelled words in the results screen.
+// drawResultsContent draws the statistics, WPM timeline graph, and misspelled words in the results screen.
 func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data ResultsData) {
 	currentY := boxY + 2
 
@@ -451,6 +455,14 @@ func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data 
 	accuracyText := fmt.Sprintf("Accuracy: %.1f%%", data.Accuracy)
 	r.DrawText(boxX+4, currentY, accuracyText, data.Theme.Foreground, data.Theme.Background)
 	currentY += 2
+
+	// Draw WPM timeline graph if we have history
+	if len(data.WPMHistory) > 1 {
+		graphHeight := 17 // Increased to accommodate X-axis labels
+		graphWidth := boxWidth - 8
+		r.drawWPMGraph(boxX+4, currentY, graphWidth, graphHeight, data.WPMHistory, data.ErrorTimestamps, data.Theme)
+		currentY += graphHeight + 2
+	}
 
 	// Draw separator
 	borderStyle := tcell.StyleDefault.Foreground(data.Theme.Border).Background(data.Theme.Background)
@@ -469,21 +481,56 @@ func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data 
 		r.DrawText(boxX+4, currentY, header, data.Theme.Title, data.Theme.Background)
 		currentY += 2
 
-		maxWords := boxHeight - 12
-		for i, word := range data.MisspelledWords {
-			if i >= maxWords {
-				moreText := fmt.Sprintf("... and %d more", len(data.MisspelledWords)-i)
-				r.DrawText(boxX+6, currentY, moreText, data.Theme.MenuDimText, data.Theme.Background)
-				break
+		// Build comma-separated list with counts
+		var wordList []string
+		for _, word := range data.MisspelledWords {
+			count := data.WordCounts[word]
+			if count > 1 {
+				wordList = append(wordList, fmt.Sprintf("%s (x%d)", word, count))
+			} else {
+				wordList = append(wordList, word)
+			}
+		}
+
+		// Calculate available width and height for wrapping
+		contentWidth := boxWidth - 12                        // Leave margin on both sides
+		availableHeight := boxHeight - (currentY - boxY) - 3 // Space until help text
+
+		// Wrap the text to fit width
+		currentLine := ""
+		linesDrawn := 0
+
+		for i, word := range wordList {
+			var testLine string
+			if currentLine == "" {
+				testLine = word
+			} else {
+				testLine = currentLine + ", " + word
 			}
 
-			count := data.WordCounts[word]
-			wordText := fmt.Sprintf("• %s", word)
-			if count > 1 {
-				wordText = fmt.Sprintf("• %s (x%d)", word, count)
+			// Check if adding this word exceeds width
+			if len(testLine) > contentWidth {
+				// Draw current line and start new one
+				if linesDrawn < availableHeight {
+					r.DrawText(boxX+6, currentY, currentLine, data.Theme.TextIncorrect, data.Theme.Background)
+					currentY++
+					linesDrawn++
+				}
+				currentLine = word
+			} else {
+				currentLine = testLine
 			}
-			r.DrawText(boxX+6, currentY, wordText, data.Theme.TextIncorrect, data.Theme.Background)
-			currentY++
+
+			// If this is the last word, draw the remaining line
+			if i == len(wordList)-1 {
+				if linesDrawn < availableHeight {
+					r.DrawText(boxX+6, currentY, currentLine, data.Theme.TextIncorrect, data.Theme.Background)
+				} else {
+					// Too many words, show truncation message
+					moreText := fmt.Sprintf("... and more")
+					r.DrawText(boxX+6, currentY, moreText, data.Theme.MenuDimText, data.Theme.Background)
+				}
+			}
 		}
 	}
 
@@ -587,4 +634,256 @@ func CalculateScrollLine(cursorLine, maxVisibleLines, totalLines int) int {
 	}
 
 	return scrollLine
+}
+
+// drawWPMGraph renders a timeline graph of WPM changes over time.
+// The graph uses ASCII characters to draw a line chart showing typing speed progression.
+//
+// Parameters:
+//   - x, y: top-left position of the graph
+//   - width, height: dimensions of the graph area
+//   - history: slice of WPM snapshots to plot
+//   - errorTimestamps: timestamps when typing errors occurred
+//   - theme: color theme for rendering
+func (r *Renderer) drawWPMGraph(x, y, width, height int, history []WPMSnapshot, errorTimestamps []time.Time, theme Theme) {
+	if len(history) < 2 || width < 10 || height < 3 {
+		return
+	}
+
+	// Find max WPM for scaling
+	maxWPM := history[0].WPM
+	for _, snapshot := range history {
+		if snapshot.WPM > maxWPM {
+			maxWPM = snapshot.WPM
+		}
+	}
+
+	// Always start at 0 and round up to nearest 25 WPM increment
+	minWPM := 0.0
+	maxWPM = float64(int(maxWPM/25)+1) * 25
+	if maxWPM < 25 {
+		maxWPM = 25
+	}
+
+	// Draw title
+	title := "WPM Timeline"
+	titleX := x + (width-len(title))/2
+	r.DrawText(titleX, y, title, theme.Title, theme.Background)
+	y++ // Move down after title
+
+	graphHeight := height - 3 // Reserve space for title, Y-axis labels, and X-axis
+	graphWidth := width - 7   // Reserve space for Y-axis labels (4 chars + 3 space)
+
+	// Draw Y-axis labels at every 25 WPM increment
+	numLabels := int(maxWPM/25) + 1 // Number of labels from 0 to maxWPM
+	for i := 0; i < numLabels; i++ {
+		wpmValue := float64(i) * 25
+		label := fmt.Sprintf("%4.0f", wpmValue) // Right-align with width of 4
+
+		// Calculate Y position for this label (inverted)
+		normalized := (wpmValue - minWPM) / (maxWPM - minWPM)
+		labelY := y + graphHeight - 1 - int(normalized*float64(graphHeight-1))
+
+		r.DrawText(x, labelY, label, theme.Help, theme.Background)
+	}
+
+	// Starting position for graph content
+	graphX := x + 6 // Y-axis labels are 4 chars + 2 space padding
+	graphY := y
+
+	// Initialize graph area with spaces
+	graphStyle := tcell.StyleDefault.Foreground(theme.TextDefault).Background(theme.Background)
+	for gy := 0; gy < graphHeight; gy++ {
+		for gx := 0; gx < graphWidth; gx++ {
+			r.screen.SetContent(graphX+gx, graphY+gy, ' ', nil, graphStyle)
+		}
+	}
+
+	// Calculate points for the graph
+	points := make([]int, graphWidth)
+	for i := range points {
+		// Map column to history index
+		historyIdx := int(float64(i) / float64(graphWidth-1) * float64(len(history)-1))
+		if historyIdx >= len(history) {
+			historyIdx = len(history) - 1
+		}
+
+		wpm := history[historyIdx].WPM
+
+		// Scale WPM to graph height (inverted because Y increases downward)
+		normalized := (wpm - minWPM) / (maxWPM - minWPM)
+		if normalized < 0 {
+			normalized = 0
+		}
+		if normalized > 1 {
+			normalized = 1
+		}
+
+		// Convert to screen coordinates (invert Y)
+		points[i] = graphHeight - 1 - int(normalized*float64(graphHeight-1))
+	}
+
+	// Draw graph using braille characters for smooth lines
+	lineStyle := tcell.StyleDefault.Foreground(theme.TextCorrect).Background(theme.Background).Bold(true)
+
+	// Helper function for absolute value
+	abs := func(n int) int {
+		if n < 0 {
+			return -n
+		}
+		return n
+	}
+
+	// Braille characters are 2 dots wide by 4 dots tall
+	// We need braille grid that matches our graphWidth and graphHeight
+	brailleWidth := graphWidth   // Number of braille characters horizontally
+	brailleHeight := graphHeight // Number of braille characters vertically
+	brailleGrid := make([][]uint8, brailleHeight)
+	for i := range brailleGrid {
+		brailleGrid[i] = make([]uint8, brailleWidth)
+	}
+
+	// Map each point to braille grid with 2x4 sub-pixel precision
+	for i := 0; i < len(points)-1; i++ {
+		// Points array has one entry per character column
+		// Scale to 2x width (braille horizontal resolution) and 4x height (braille vertical resolution)
+		x1, y1 := i*2, points[i]*4
+		x2, y2 := (i+1)*2, points[i+1]*4
+
+		// Draw line segment between consecutive points using Bresenham's algorithm
+		dx := abs(x2 - x1)
+		dy := abs(y2 - y1)
+		sx := 1
+		if x1 > x2 {
+			sx = -1
+		}
+		sy := 1
+		if y1 > y2 {
+			sy = -1
+		}
+		err := dx - dy
+
+		x, y := x1, y1
+		for {
+			// Convert sub-pixel coordinates to braille cell and dot position
+			cellX := x / 2
+			cellY := y / 4
+			dotX := x % 2 // 0 or 1 (left or right dot in braille cell)
+			dotY := y % 4 // 0-3 (which row of dots in braille cell)
+
+			// Set braille dot if within grid bounds
+			if cellX >= 0 && cellX < brailleWidth && cellY >= 0 && cellY < brailleHeight {
+				// Braille dot pattern: dots are numbered 0-7
+				// Left column: 0,1,2,3 (top to bottom), Right column: 4,5,6,7 (top to bottom)
+				dotIndex := dotX*4 + dotY
+				brailleGrid[cellY][cellX] |= (1 << dotIndex)
+			}
+
+			if x == x2 && y == y2 {
+				break
+			}
+
+			e2 := 2 * err
+			if e2 > -dy {
+				err -= dy
+				x += sx
+			}
+			if e2 < dx {
+				err += dx
+				y += sy
+			}
+		}
+	}
+
+	// Convert braille grid to unicode braille characters and render
+	brailleBase := rune(0x2800) // Unicode braille pattern base
+	for cellY := 0; cellY < brailleHeight; cellY++ {
+		for cellX := 0; cellX < brailleWidth; cellX++ {
+			if brailleGrid[cellY][cellX] != 0 {
+				brailleChar := brailleBase + rune(brailleGrid[cellY][cellX])
+				r.screen.SetContent(graphX+cellX, graphY+cellY, brailleChar, nil, lineStyle)
+			}
+		}
+	}
+
+	// Draw error markers
+	if len(history) > 0 && len(errorTimestamps) > 0 {
+		startTime := history[0].Timestamp
+		endTime := history[len(history)-1].Timestamp
+		totalDuration := endTime.Sub(startTime).Seconds()
+
+		if totalDuration > 0 {
+			errorStyle := tcell.StyleDefault.Foreground(theme.TextIncorrect).Background(theme.Background)
+
+			for _, errorTime := range errorTimestamps {
+				// Calculate time offset from start
+				errorOffset := errorTime.Sub(startTime).Seconds()
+
+				// Skip errors outside the graph range
+				if errorOffset < 0 || errorOffset > totalDuration {
+					continue
+				}
+
+				// Calculate X position for this error
+				normalized := errorOffset / totalDuration
+				errorX := graphX + int(normalized*float64(graphWidth-1))
+
+				// Draw error marker at the bottom of the graph
+				r.screen.SetContent(errorX, graphY+graphHeight-1, '×', nil, errorStyle)
+			}
+		}
+	}
+
+	// Draw X-axis with time labels
+	if len(history) > 0 {
+		// Calculate total duration in seconds
+		totalDuration := history[len(history)-1].Timestamp.Sub(history[0].Timestamp).Seconds()
+
+		// Draw X-axis time labels
+		xAxisY := graphY + graphHeight + 1
+
+		// Determine time interval for labels based on duration
+		var interval float64
+		if totalDuration <= 30 {
+			interval = 5 // Every 5 seconds for short tests
+		} else if totalDuration <= 60 {
+			interval = 10 // Every 10 seconds for medium tests
+		} else if totalDuration <= 120 {
+			interval = 15 // Every 15 seconds for longer tests
+		} else {
+			interval = 30 // Every 30 seconds for very long tests
+		}
+
+		// Draw time labels
+		for t := 0.0; t <= totalDuration; t += interval {
+			// Calculate X position for this time
+			normalized := t / totalDuration
+			labelX := graphX + int(normalized*float64(graphWidth-1))
+
+			// Format time label
+			var timeLabel string
+			if t >= 60 {
+				minutes := int(t / 60)
+				seconds := int(t) % 60
+				if seconds == 0 {
+					timeLabel = fmt.Sprintf("%dm", minutes)
+				} else {
+					timeLabel = fmt.Sprintf("%dm%ds", minutes, seconds)
+				}
+			} else {
+				timeLabel = fmt.Sprintf("%.0fs", t)
+			}
+
+			// Center the label on the tick mark
+			labelX -= len(timeLabel) / 2
+			if labelX < graphX {
+				labelX = graphX
+			}
+			if labelX+len(timeLabel) > graphX+graphWidth {
+				labelX = graphX + graphWidth - len(timeLabel)
+			}
+
+			r.DrawText(labelX, xAxisY, timeLabel, theme.Help, theme.Background)
+		}
+	}
 }
