@@ -123,9 +123,11 @@ func NewApp(stdinText, textsDir string, restoreSession bool) (*App, error) {
 
 	// stdin text takes precedence over session restoration, always text mode
 	if stdinText != "" {
+		// Normalize whitespace in stdin text
+		normalizedStdin := NormalizeWhitespace(stdinText)
 		stdinSource := TextSource{
 			Name:    "stdin",
-			Content: stdinText,
+			Content: normalizedStdin,
 			Path:    "",
 		}
 		textLibrary.AddText(stdinSource)

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // TextSource represents a typing test text with its metadata.
@@ -14,6 +15,56 @@ type TextSource struct {
 	Name    string // Display name (filename without extension)
 	Content string // The actual text content
 	Path    string // Full file path
+}
+
+// NormalizeWhitespace converts all whitespace characters to regular spaces,
+// tabs, or newlines. This ensures that unusual Unicode whitespace characters
+// (like non-breaking spaces, zero-width spaces, em spaces, etc.) are replaced
+// with typeable characters. Also removes carriage returns (\r) from Windows-style
+// line endings (CRLF) to convert them to Unix-style (LF only).
+//
+// Preserved whitespace:
+//   - ' ' (U+0020): regular space
+//   - '\t' (U+0009): tab
+//   - '\n' (U+000A): line feed/newline
+//
+// Removed/converted:
+//   - '\r' (U+000D): carriage return (removed entirely)
+//   - All other Unicode whitespace → converted to regular space
+//   - Zero-width characters → converted to regular space
+//
+// Parameters:
+//   - text: the input text with potentially unusual whitespace
+//
+// Returns normalized text with only regular spaces, tabs, and newlines.
+func NormalizeWhitespace(text string) string {
+	var result strings.Builder
+	result.Grow(len(text))
+
+	for _, r := range text {
+		switch r {
+		case ' ', '\t', '\n':
+			// Keep regular spaces, tabs, and newlines as-is
+			result.WriteRune(r)
+		case '\r':
+			// Skip carriage returns entirely (converts CRLF to LF)
+			continue
+		case '\u200B', '\u200C', '\u200D', '\uFEFF':
+			// Zero-width space, zero-width non-joiner, zero-width joiner, zero-width no-break space
+			// Convert to regular space
+			result.WriteRune(' ')
+		default:
+			if unicode.IsSpace(r) {
+				// Replace other Unicode whitespace with regular space
+				result.WriteRune(' ')
+			} else {
+				// Keep non-whitespace characters
+				result.WriteRune(r)
+			}
+		}
+	}
+
+	return result.String()
 }
 
 // TextLibrary manages the collection of available typing test texts.
@@ -38,7 +89,7 @@ func NewTextLibrary(textsDir string) *TextLibrary {
 		textsDir: textsDir,
 		defaultText: TextSource{
 			Name:    "Default (Tolkien)",
-			Content: defaultSampleText,
+			Content: NormalizeWhitespace(defaultSampleText),
 			Path:    "",
 		},
 		texts:      make([]TextSource, 0),
@@ -96,6 +147,9 @@ func (tl *TextLibrary) loadTexts() error {
 		if text == "" {
 			continue
 		}
+
+		// Normalize whitespace to ensure all whitespace is typeable
+		text = NormalizeWhitespace(text)
 
 		// Create text source
 		name := strings.TrimSuffix(entry.Name(), ".txt")
@@ -166,5 +220,7 @@ func (tl *TextLibrary) GetCurrentIndex() int {
 // AddText adds a new text to the library.
 // This is useful for dynamically adding texts like stdin input.
 func (tl *TextLibrary) AddText(text TextSource) {
+	// Normalize whitespace in the content
+	text.Content = NormalizeWhitespace(text.Content)
 	tl.texts = append(tl.texts, text)
 }

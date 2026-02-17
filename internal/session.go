@@ -58,6 +58,9 @@ func NewSessionManager() (*SessionManager, error) {
 
 // SaveSession saves the current typing session to disk.
 func (sm *SessionManager) SaveSession(session Session) error {
+	// Normalize whitespace before saving to ensure consistency
+	session.TextContent = NormalizeWhitespace(session.TextContent)
+
 	// Add timestamp
 	session.SavedAt = time.Now().Format(time.RFC3339)
 
@@ -94,6 +97,9 @@ func (sm *SessionManager) LoadSession() (*Session, error) {
 	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal session: %w", err)
 	}
+
+	// Normalize whitespace in loaded content to ensure compatibility
+	session.TextContent = NormalizeWhitespace(session.TextContent)
 
 	return &session, nil
 }

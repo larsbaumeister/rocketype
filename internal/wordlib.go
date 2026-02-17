@@ -155,7 +155,7 @@ func (wl *WordLibrary) GenerateRandomWords(count int) string {
 	}
 
 	words := make([]string, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		words[i] = wordSet.Words[wl.rand.Intn(len(wordSet.Words))]
 	}
 
