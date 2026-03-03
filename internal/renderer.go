@@ -447,43 +447,106 @@ func (r *Renderer) drawNoResults(menuX, menuWidth, startY int, theme Theme) {
 
 // drawResultsContent draws the statistics, WPM timeline graph, and misspelled words in the results screen.
 func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data ResultsData) {
-	currentY := boxY + 2
+	contentX := boxX + 4
+	contentY := boxY + 2
+	contentWidth := boxWidth - 8
+	contentHeight := boxHeight - 4
 
-	// Draw stats
+	if contentWidth < 20 || contentHeight < 8 {
+		wpmText := fmt.Sprintf("WPM: %.1f", data.WPM)
+		r.DrawText(contentX, contentY, wpmText, data.Theme.Foreground, data.Theme.Background)
+		accuracyText := fmt.Sprintf("Accuracy: %.1f%%", data.Accuracy)
+		r.DrawText(contentX, contentY+1, accuracyText, data.Theme.Foreground, data.Theme.Background)
+		helpText := "Press Enter or 'r' to restart  |  Esc to quit"
+		helpX := boxX + (boxWidth-len(helpText))/2
+		r.DrawText(helpX, boxY+boxHeight-2, helpText, data.Theme.Help, data.Theme.Background)
+		return
+	}
+
+	const chartGap = 4
+	const minLeftWidth = 22
+	const minChartWidth = 18
+	const chartDefaultHeight = 17
+
+	wantChart := len(data.WPMHistory) > 1
+	chartHeight := min(chartDefaultHeight, contentHeight-2)
+	statsHeight := 3
+	leaderboardMinHeight := 3
+	separatorHeight := 2
+	misspellMinHeight := 2
+	requiredHeightWithChart := statsHeight + chartHeight + leaderboardMinHeight + separatorHeight + misspellMinHeight
+
+	splitChart := false
+	if wantChart && contentHeight < requiredHeightWithChart {
+		if contentWidth >= minLeftWidth+chartGap+minChartWidth {
+			splitChart = true
+		} else {
+			wantChart = false
+		}
+	}
+
+	leftWidth := contentWidth
+	chartX := 0
+	chartWidth := 0
+	if splitChart {
+		candidateLeft := min(40, contentWidth-minChartWidth-chartGap)
+		if candidateLeft >= minLeftWidth {
+			leftWidth = candidateLeft
+			chartX = contentX + leftWidth + chartGap
+			chartWidth = contentWidth - leftWidth - chartGap
+		} else {
+			wantChart = false
+			splitChart = false
+		}
+	}
+
+	currentY := contentY
+
+	// Draw stats (left column)
 	wpmText := fmt.Sprintf("WPM: %.1f", data.WPM)
-	r.DrawText(boxX+4, currentY, wpmText, data.Theme.Foreground, data.Theme.Background)
+	r.DrawText(contentX, currentY, wpmText, data.Theme.Foreground, data.Theme.Background)
 	currentY++
 
 	accuracyText := fmt.Sprintf("Accuracy: %.1f%%", data.Accuracy)
-	r.DrawText(boxX+4, currentY, accuracyText, data.Theme.Foreground, data.Theme.Background)
+	r.DrawText(contentX, currentY, accuracyText, data.Theme.Foreground, data.Theme.Background)
 	currentY += 2
 
-	// Draw WPM timeline graph if we have history
-	if len(data.WPMHistory) > 1 {
-		graphHeight := 17 // Increased to accommodate X-axis labels
-		graphWidth := boxWidth - 8
-		r.drawWPMGraph(boxX+4, currentY, graphWidth, graphHeight, data.WPMHistory, data.ErrorTimestamps, data.Theme)
-		currentY += graphHeight + 2
+	// Draw WPM timeline graph
+	if wantChart {
+		if splitChart {
+			if chartHeight >= 3 {
+				r.drawWPMGraph(chartX, contentY, chartWidth, chartHeight, data.WPMHistory, data.ErrorTimestamps, data.Theme)
+			}
+		} else if chartHeight >= 3 {
+			graphWidth := leftWidth
+			r.drawWPMGraph(contentX, currentY, graphWidth, chartHeight, data.WPMHistory, data.ErrorTimestamps, data.Theme)
+			currentY += chartHeight + 2
+		}
 	}
 
-	// Draw leaderboard table
-	currentY = r.drawLeaderboardTable(boxX, boxY, currentY, boxWidth, boxHeight, data)
+	// Draw leaderboard table (left column)
+	currentY = r.drawLeaderboardTable(contentX-4, boxY, currentY, leftWidth+8, boxHeight, data)
 
-	// Draw separator
+	// Draw separator (left column)
 	borderStyle := tcell.StyleDefault.Foreground(data.Theme.Border).Background(data.Theme.Background)
-	for x := boxX + 2; x < boxX+boxWidth-2; x++ {
+	separatorStart := contentX
+	separatorEnd := contentX + leftWidth
+	for x := separatorStart; x < separatorEnd; x++ {
 		r.screen.SetContent(x, currentY, '─', nil, borderStyle)
 	}
 	currentY += 2
 
-	// Draw misspelled words
+	// Draw misspelled words (left column)
 	if len(data.MisspelledWords) == 0 {
 		perfectText := "Perfect! No mistakes!"
-		perfectX := boxX + (boxWidth-len(perfectText))/2
+		perfectX := contentX + (leftWidth-len(perfectText))/2
+		if perfectX < contentX {
+			perfectX = contentX
+		}
 		r.DrawText(perfectX, currentY, perfectText, data.Theme.TextCorrect, data.Theme.Background)
 	} else {
 		header := "Misspelled Words:"
-		r.DrawText(boxX+4, currentY, header, data.Theme.Title, data.Theme.Background)
+		r.DrawText(contentX, currentY, header, data.Theme.Title, data.Theme.Background)
 		currentY += 2
 
 		// Build comma-separated list with counts
@@ -498,7 +561,7 @@ func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data 
 		}
 
 		// Calculate available width and height for wrapping
-		contentWidth := boxWidth - 12                        // Leave margin on both sides
+		contentWidth := leftWidth - 4                        // Leave margin on both sides
 		availableHeight := boxHeight - (currentY - boxY) - 3 // Space until help text
 
 		// Wrap the text to fit width
@@ -517,7 +580,7 @@ func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data 
 			if len(testLine) > contentWidth {
 				// Draw current line and start new one
 				if linesDrawn < availableHeight {
-					r.DrawText(boxX+6, currentY, currentLine, data.Theme.TextIncorrect, data.Theme.Background)
+					r.DrawText(contentX+2, currentY, currentLine, data.Theme.TextIncorrect, data.Theme.Background)
 					currentY++
 					linesDrawn++
 				}
@@ -529,11 +592,11 @@ func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data 
 			// If this is the last word, draw the remaining line
 			if i == len(wordList)-1 {
 				if linesDrawn < availableHeight {
-					r.DrawText(boxX+6, currentY, currentLine, data.Theme.TextIncorrect, data.Theme.Background)
+					r.DrawText(contentX+2, currentY, currentLine, data.Theme.TextIncorrect, data.Theme.Background)
 				} else {
 					// Too many words, show truncation message
-					moreText := fmt.Sprintf("... and more")
-					r.DrawText(boxX+6, currentY, moreText, data.Theme.MenuDimText, data.Theme.Background)
+					moreText := "... and more"
+					r.DrawText(contentX+2, currentY, moreText, data.Theme.MenuDimText, data.Theme.Background)
 				}
 			}
 		}
