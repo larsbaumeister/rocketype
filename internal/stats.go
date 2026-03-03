@@ -163,8 +163,8 @@ func (s *Stats) RecordMisspelledWord(word string) {
 	// Split it into individual words and record each separately
 	if strings.ContainsAny(word, "\n\r\t") || strings.Contains(word, "  ") {
 		// Split on whitespace and record each word separately
-		words := strings.Fields(word)
-		for _, w := range words {
+		words := strings.FieldsSeq(word)
+		for w := range words {
 			s.RecordMisspelledWord(w) // Recursive call with cleaned word
 		}
 		return
