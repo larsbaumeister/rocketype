@@ -1,50 +1,87 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+
+Version change: initial → 1.0.0
+Modified principles: Initial formalization
+Added sections: Platform/Tech Constraints, Development Workflow
+Removed sections: None
+Templates requiring updates:
+- .specify/templates/plan-template.md   ✅ (principles now testable/gated)
+- .specify/templates/spec-template.md   ✅ (requirements must align with principles)
+- .specify/templates/tasks-template.md  ✅ (task categories reflect test, theme, dependency, CLI)
+- README.md                            ✅ (matches terminal, theme, minimal, simplicity focus)
+Follow-up TODOs:
+- TODO(RATIFICATION_DATE): explanation, fill once project history clarified
+
+No unexplained placeholders remain.
+-->
+
+# Rocketype Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Terminal-First Experience
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+All features MUST be accessible through a standard terminal interface, with no graphical dependencies beyond terminal emulation. UX, commands, and visual feedback are optimized for keyboard interaction.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+Rationale: Ensures portability, accessibility, and minimalism.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+---
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### II. Minimal Dependencies
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+Only essential external packages (e.g., tcell for terminal handling, Go standard library) are permitted. New dependencies require explicit rationale and code review.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+Rationale: Guarantees maintainability, security, and ease of distribution.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+---
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### III. Multi-Theme Flexibility
+
+The application MUST support multiple selectable themes, allowing runtime theme changes. Themes are defined centrally, not hardcoded in logic.
+
+Rationale: Provides user personalization and accessibility for different environments.
+
+---
+
+### IV. Simplicity & Maintainability
+
+Code MUST remain simple, readable, and easy to maintain; documentation is mandatory for all exported functions and key sections. Avoid feature bloat and premature optimization.
+
+Rationale: Enables long-term stability and community contribution.
+
+---
+
+## Platform and Technology Constraints
+
+- Language: Go 1.x
+- Terminal UI: Only tcell v2 and standard library allowed
+- Multi-OS: Linux, macOS, Windows supported
+- Text file input: Plain UTF-8 `.txt` files and piped stdin practice required
+- Theme architecture: All themes defined in a dedicated module; no hardcoded colors
+- Custom texts: Loaded dynamically, platform directories auto-managed
+
+---
+
+## Development Workflow
+
+- All code changes via Pull Request (PR), reviewed for compliance with all principles.
+- `gofmt` and `go vet` must pass before acceptance.
+- Linting is required for every proposed change.
+- Every PR must document principle compliance and justify complexity.
+- CI/CD system should gate merges on lint and principle check.
+- New dependencies must be justified in the PR and require approval.
+
+---
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+- This constitution supersedes all workflow conventions and is mandatory for all contributors.
+- Amendment procedure: All changes require PR, full rationale, clear diff of principles or sections changed, and full team or maintainer approval.
+- Versioning: Amendments that remove or significantly alter principles trigger MAJOR version bumps; new principles or material expansion is MINOR; refinements/clarifications are PATCH.
+- Compliance reviews: All PRs and releases must explicitly document principle compliance; reviewers will block merges if requirements are not met.
+- The authoritative runtime guidance is found in `README.md`; it must be manually synced with amendments to this constitution.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+---
+
+**Version**: 1.0.0 | **Ratified**: TODO(RATIFICATION_DATE): explanation, fill once project history clarified | **Last Amended**: 2026-03-03

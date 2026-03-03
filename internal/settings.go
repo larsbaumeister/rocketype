@@ -30,7 +30,7 @@ type SettingsManager struct {
 // NewSettingsManager creates a new settings manager.
 // It uses the platform-appropriate config directory.
 func NewSettingsManager() (*SettingsManager, error) {
-	configDir, err := getConfigDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
 	}

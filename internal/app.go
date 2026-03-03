@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -45,6 +46,8 @@ type App struct {
 	// Scroll state for text mode
 	currentScrollLine int // Current scroll position (top visible line)
 	lastCursorLine    int // Last calculated cursor line (to detect line changes)
+
+	leaderboards map[string][]LeaderboardEntry
 }
 
 const (
@@ -248,6 +251,17 @@ func NewApp(stdinText, textsDir string, restoreSession bool) (*App, error) {
 	// Initialize commands
 	app.initCommands()
 
+	// Load leaderboards
+	leaderboards, err := LoadLeaderboard()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "leaderboard: failed to load, starting empty: %v\n", err)
+		leaderboards = map[string][]LeaderboardEntry{}
+	}
+	if leaderboards == nil {
+		leaderboards = map[string][]LeaderboardEntry{}
+	}
+	app.leaderboards = leaderboards
+
 	return app, nil
 }
 
@@ -308,8 +322,12 @@ func (a *App) Run() error {
 				if a.limitType == "time" {
 					elapsed := time.Since(a.testStarted).Seconds()
 					if elapsed >= float64(a.timeLimit) {
+						wasFinished := a.typingTest.IsFinished()
 						a.typingTest.MarkFinished()
 						a.showResults = true
+						if !wasFinished {
+							a.recordLeaderboardEntry()
+						}
 					}
 				}
 				// Redraw to update timer
@@ -373,6 +391,7 @@ func (a *App) Run() error {
 // handleKey routes keyboard events to the input handler with current mode.
 func (a *App) handleKey(ev *tcell.EventKey) {
 	mode := a.getCurrentMode()
+	wasFinished := a.typingTest.IsFinished()
 
 	// Special case: command menu execution needs app context
 	if mode == ModeCommandMenu && ev.Key() == tcell.KeyEnter {
@@ -421,6 +440,9 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	// Update results state after input
 	if a.typingTest.IsFinished() {
 		a.showResults = true
+		if !wasFinished {
+			a.recordLeaderboardEntry()
+		}
 	}
 }
 
@@ -568,6 +590,8 @@ func (a *App) drawTypingScreen() {
 func (a *App) drawResultsScreen() {
 	stats := a.typingTest.GetStats()
 	misspelledWords := stats.GetMisspelledWords()
+	leaderboardKey := a.getLeaderboardKey()
+	leaderboardEntries := a.leaderboards[leaderboardKey]
 
 	// Build word counts map
 	wordCounts := make(map[string]int)
@@ -582,9 +606,58 @@ func (a *App) drawResultsScreen() {
 		WordCounts:      wordCounts,
 		WPMHistory:      stats.GetWPMHistory(),
 		ErrorTimestamps: stats.GetErrorTimestamps(),
+		Leaderboard:     leaderboardEntries,
 		Theme:           a.theme,
 	}
 	a.renderer.DrawResults(resultsData)
+}
+
+func (a *App) getLeaderboardKey() string {
+	if a.mode == "words" {
+		wordSet := a.wordLibrary.GetCurrentWordSet()
+		return fmt.Sprintf("words:%s", wordSet.Name)
+	}
+
+	currentText := a.textLibrary.GetCurrentText()
+	return fmt.Sprintf("text:%s", currentText.Name)
+}
+
+func (a *App) recordLeaderboardEntry() {
+	stats := a.typingTest.GetStats()
+	user := CurrentLeaderboardUser()
+	if strings.TrimSpace(user.Username) == "" {
+		user.Username = "unknown"
+	}
+	realName := strings.TrimSpace(user.RealName)
+	if realName == "" {
+		realName = user.Username
+	}
+	entry := LeaderboardEntry{
+		Username:  user.Username,
+		RealName:  realName,
+		WPM:       stats.GetWPM(),
+		Accuracy:  stats.GetAccuracy(),
+		Timestamp: time.Now(),
+		Mode:      a.mode,
+	}
+	if a.mode == "words" {
+		wordSet := a.wordLibrary.GetCurrentWordSet()
+		entry.TextName = wordSet.Name
+	} else {
+		currentText := a.textLibrary.GetCurrentText()
+		entry.TextName = currentText.Name
+	}
+
+	key := a.getLeaderboardKey()
+	entries := append(a.leaderboards[key], entry)
+	entries = SortLeaderboardEntries(entries)
+	if entries == nil {
+		entries = []LeaderboardEntry{}
+	}
+	a.leaderboards[key] = entries
+	if err := SaveLeaderboard(a.leaderboards); err != nil {
+		fmt.Fprintf(os.Stderr, "leaderboard: failed to save: %v\n", err)
+	}
 }
 
 // drawCommandMenuOverlay renders the command menu.

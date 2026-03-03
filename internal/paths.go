@@ -158,3 +158,59 @@ func EnsureTextsDir(dir string) error {
 
 	return nil
 }
+
+// GetConfigDir returns the platform-appropriate config directory.
+// It follows platform conventions for storing application config files.
+//
+// If the directory doesn't exist, it will be created.
+func GetConfigDir() (string, error) {
+	var configDir string
+
+	switch runtime.GOOS {
+	case "windows":
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			appData = filepath.Join(homeDir, "AppData", "Roaming")
+		}
+		configDir = filepath.Join(appData, "rocketype")
+
+	case "darwin":
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		configDir = filepath.Join(homeDir, "Library", "Application Support", "rocketype")
+
+	default: // Linux and other Unix-like
+		xdgConfig := os.Getenv("XDG_CONFIG_HOME")
+		if xdgConfig == "" {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			xdgConfig = filepath.Join(homeDir, ".config")
+		}
+		configDir = filepath.Join(xdgConfig, "rocketype")
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return "", err
+	}
+
+	return configDir, nil
+}
+
+// GetLeaderboardPath returns the path to the local leaderboard storage file.
+func GetLeaderboardPath() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(configDir, "leaderboard.json"), nil
+}

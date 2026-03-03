@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -311,6 +312,7 @@ type ResultsData struct {
 	WordCounts      map[string]int
 	WPMHistory      []WPMSnapshot // Timeline of WPM measurements
 	ErrorTimestamps []time.Time   // Timestamps when errors occurred
+	Leaderboard     []LeaderboardEntry
 	Theme           Theme
 }
 
@@ -464,6 +466,9 @@ func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data 
 		currentY += graphHeight + 2
 	}
 
+	// Draw leaderboard table
+	currentY = r.drawLeaderboardTable(boxX, boxY, currentY, boxWidth, boxHeight, data)
+
 	// Draw separator
 	borderStyle := tcell.StyleDefault.Foreground(data.Theme.Border).Background(data.Theme.Background)
 	for x := boxX + 2; x < boxX+boxWidth-2; x++ {
@@ -538,6 +543,102 @@ func (r *Renderer) drawResultsContent(boxX, boxY, boxWidth, boxHeight int, data 
 	helpText := "Press Enter or 'r' to restart  |  Esc to quit"
 	helpX := boxX + (boxWidth-len(helpText))/2
 	r.DrawText(helpX, boxY+boxHeight-2, helpText, data.Theme.Help, data.Theme.Background)
+}
+
+func (r *Renderer) drawLeaderboardTable(boxX, boxY, startY, boxWidth, boxHeight int, data ResultsData) int {
+	currentY := startY
+	if currentY >= boxY+boxHeight-6 {
+		return currentY
+	}
+
+	header := "Leaderboard (Top 10)"
+	r.DrawText(boxX+4, currentY, header, data.Theme.Title, data.Theme.Background)
+	currentY += 2
+
+	if len(data.Leaderboard) == 0 {
+		r.DrawText(boxX+4, currentY, "No scores yet.", data.Theme.MenuDimText, data.Theme.Background)
+		return currentY + 2
+	}
+
+	columns := []string{"#", "User", "Name", "WPM", "Acc", "Date"}
+	colWidths := r.calculateLeaderboardColumnWidths(boxWidth)
+	if len(colWidths) != len(columns) {
+		return currentY
+	}
+
+	// Header row
+	line := r.formatLeaderboardRow(columns, colWidths)
+	r.DrawText(boxX+4, currentY, line, data.Theme.Foreground, data.Theme.Background)
+	currentY++
+
+	// Divider
+	divider := r.formatLeaderboardDivider(colWidths)
+	r.DrawText(boxX+4, currentY, divider, data.Theme.Border, data.Theme.Background)
+	currentY++
+
+	maxRows := boxY + boxHeight - 6 - currentY
+	for i, entry := range data.Leaderboard {
+		if i >= maxRows {
+			break
+		}
+		row := []string{
+			fmt.Sprintf("%d", i+1),
+			SafeRunes(entry.Username, colWidths[1]),
+			SafeRunes(entry.RealName, colWidths[2]),
+			fmt.Sprintf("%.1f", entry.WPM),
+			fmt.Sprintf("%.1f%%", entry.Accuracy),
+			entry.Timestamp.Format("2006-01-02"),
+		}
+		line := r.formatLeaderboardRow(row, colWidths)
+		r.DrawText(boxX+4, currentY, line, data.Theme.Foreground, data.Theme.Background)
+		currentY++
+	}
+
+	return currentY + 1
+}
+
+func (r *Renderer) calculateLeaderboardColumnWidths(boxWidth int) []int {
+	// Layout: margins handled by caller, content width is boxWidth - 8
+	contentWidth := boxWidth - 8
+	if contentWidth < 40 {
+		return []int{}
+	}
+
+	// Fixed widths for #, WPM, Acc, Date; dynamic for User/Name
+	colRank := 3
+	colWPM := 5
+	colAcc := 5
+	colDate := 10
+	spacing := 5 // spaces between columns
+	remaining := contentWidth - (colRank + colWPM + colAcc + colDate + spacing)
+	if remaining < 10 {
+		remaining = 10
+	}
+	colUser := remaining / 2
+	colName := remaining - colUser
+
+	return []int{colRank, colUser, colName, colWPM, colAcc, colDate}
+}
+
+func (r *Renderer) formatLeaderboardRow(values []string, widths []int) string {
+	parts := make([]string, 0, len(values))
+	for i, value := range values {
+		trimmed := SafeRunes(value, widths[i])
+		parts = append(parts, fmt.Sprintf("%-*s", widths[i], trimmed))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (r *Renderer) formatLeaderboardDivider(widths []int) string {
+	parts := make([]string, 0, len(widths))
+	for _, width := range widths {
+		if width <= 0 {
+			parts = append(parts, "")
+			continue
+		}
+		parts = append(parts, strings.Repeat("-", width))
+	}
+	return strings.Join(parts, " ")
 }
 
 // wrapText breaks text into lines that fit within maxWidth characters.

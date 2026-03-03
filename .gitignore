@@ -12,6 +12,9 @@ rocketype
 # Output of the go coverage tool
 *.out
 
+# Go module vendor directory
+vendor/
+
 # Go workspace file
 go.work
 

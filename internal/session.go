@@ -2,10 +2,10 @@ package internal
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 )
 
@@ -44,7 +44,7 @@ type SessionManager struct {
 // NewSessionManager creates a new session manager.
 // It uses the platform-appropriate config directory.
 func NewSessionManager() (*SessionManager, error) {
-	configDir, err := getConfigDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
 	}
@@ -128,50 +128,6 @@ func (sm *SessionManager) GetSessionPath() string {
 	return sm.sessionPath
 }
 
-// getConfigDir returns the platform-appropriate config directory.
-// This is similar to GetDefaultTextsDir but returns the base config dir.
-func getConfigDir() (string, error) {
-	var configDir string
-
-	switch runtime.GOOS {
-	case "windows":
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			homeDir, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			appData = filepath.Join(homeDir, "AppData", "Roaming")
-		}
-		configDir = filepath.Join(appData, "rocketype")
-
-	case "darwin":
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		configDir = filepath.Join(homeDir, "Library", "Application Support", "rocketype")
-
-	default: // Linux and other Unix-like
-		xdgConfig := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfig == "" {
-			homeDir, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			xdgConfig = filepath.Join(homeDir, ".config")
-		}
-		configDir = filepath.Join(xdgConfig, "rocketype")
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return "", err
-	}
-
-	return configDir, nil
-}
-
 // CreateSessionFromApp creates a Session from the current app state.
 // Note: Theme is not included as it's stored separately in settings.
 func CreateSessionFromApp(app *App) Session {
@@ -184,4 +140,121 @@ func CreateSessionFromApp(app *App) Session {
 		UserInput:   app.typingTest.GetUserInput(),
 		CursorPos:   app.typingTest.GetCursorPos(),
 	}
+}
+
+// SaveLeaderboard writes the leaderboard map to disk atomically.
+func SaveLeaderboard(leaderboards map[string][]LeaderboardEntry) error {
+	path, err := GetLeaderboardPath()
+	if err != nil {
+		return fmt.Errorf("failed to resolve leaderboard path: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create leaderboard directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(leaderboards, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal leaderboard: %w", err)
+	}
+
+	return writeFileAtomic(path, data, 0644)
+}
+
+// LoadLeaderboard reads leaderboard data from disk.
+// Returns an empty map if the file does not exist.
+func LoadLeaderboard() (map[string][]LeaderboardEntry, error) {
+	path, err := GetLeaderboardPath()
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve leaderboard path: %w", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string][]LeaderboardEntry{}, nil
+		}
+		return nil, fmt.Errorf("failed to read leaderboard file: %w", err)
+	}
+
+	if len(data) == 0 {
+		return map[string][]LeaderboardEntry{}, nil
+	}
+
+	var leaderboards map[string][]LeaderboardEntry
+	if err := json.Unmarshal(data, &leaderboards); err != nil {
+		if resetErr := ResetLeaderboard(); resetErr != nil {
+			return nil, fmt.Errorf("leaderboard corrupt and reset failed: %w", resetErr)
+		}
+		return map[string][]LeaderboardEntry{}, fmt.Errorf("leaderboard corrupt, reset to empty: %w", err)
+	}
+
+	if leaderboards == nil {
+		leaderboards = map[string][]LeaderboardEntry{}
+	}
+
+	return leaderboards, nil
+}
+
+// ResetLeaderboard resets the leaderboard file to an empty map.
+func ResetLeaderboard() error {
+	path, err := GetLeaderboardPath()
+	if err != nil {
+		return fmt.Errorf("failed to resolve leaderboard path: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create leaderboard directory: %w", err)
+	}
+
+	empty := map[string][]LeaderboardEntry{}
+	data, err := json.MarshalIndent(empty, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal empty leaderboard: %w", err)
+	}
+
+	return writeFileAtomic(path, data, 0644)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmpFile, err := os.CreateTemp(dir, base+".tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(tmpFile.Name())
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	backupPath := path + ".bak"
+	if _, err := os.Stat(path); err == nil {
+		_ = os.Remove(backupPath)
+		if err := os.Rename(path, backupPath); err != nil {
+			return fmt.Errorf("failed to backup leaderboard file: %w", err)
+		}
+	}
+
+	if err := os.Rename(tmpFile.Name(), path); err != nil {
+		if _, statErr := os.Stat(backupPath); statErr == nil {
+			_ = os.Rename(backupPath, path)
+		}
+		return fmt.Errorf("failed to replace leaderboard file: %w", err)
+	}
+
+	return nil
 }

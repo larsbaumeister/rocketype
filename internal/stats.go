@@ -1,8 +1,11 @@
 package internal
 
 import (
+	"os/user"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -10,6 +13,28 @@ const (
 	// The industry standard is 5 characters = 1 word.
 	CharsPerWord = 5.0
 )
+
+const (
+	// MaxLeaderboardEntries defines the maximum number of entries kept per leaderboard.
+	MaxLeaderboardEntries = 10
+)
+
+// LeaderboardEntry represents a single leaderboard record for a completed test.
+type LeaderboardEntry struct {
+	Username  string    `json:"username"`
+	RealName  string    `json:"real_name"`
+	WPM       float64   `json:"wpm"`
+	Accuracy  float64   `json:"accuracy"`
+	Timestamp time.Time `json:"timestamp"`
+	Mode      string    `json:"mode"`
+	TextName  string    `json:"text_name"`
+}
+
+// LeaderboardUser captures OS-derived user identity for leaderboard entries.
+type LeaderboardUser struct {
+	Username string
+	RealName string
+}
 
 // WPMSnapshot represents a WPM measurement at a specific time.
 type WPMSnapshot struct {
@@ -449,4 +474,68 @@ func (s *Stats) RestoreFromSession(startTime time.Time, totalKeystrokes, correct
 	s.misspelledOrder = misspelledOrder
 	s.wordHadError = wordHadError
 	s.testComplete = false
+}
+
+// CurrentLeaderboardUser fetches OS username and real name (if available).
+// Falls back to username when real name is missing.
+func CurrentLeaderboardUser() LeaderboardUser {
+	usr, err := user.Current()
+	if err != nil || usr == nil {
+		return LeaderboardUser{}
+	}
+
+	username := strings.TrimSpace(usr.Username)
+	realName := strings.TrimSpace(usr.Name)
+
+	return LeaderboardUser{
+		Username: username,
+		RealName: realName,
+	}
+}
+
+// SortLeaderboardEntries sorts entries by WPM desc, accuracy desc, timestamp asc.
+// Returns a new slice trimmed to MaxLeaderboardEntries.
+func SortLeaderboardEntries(entries []LeaderboardEntry) []LeaderboardEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	sorted := make([]LeaderboardEntry, len(entries))
+	copy(sorted, entries)
+
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].WPM != sorted[j].WPM {
+			return sorted[i].WPM > sorted[j].WPM
+		}
+		if sorted[i].Accuracy != sorted[j].Accuracy {
+			return sorted[i].Accuracy > sorted[j].Accuracy
+		}
+		return sorted[i].Timestamp.Before(sorted[j].Timestamp)
+	})
+
+	if len(sorted) > MaxLeaderboardEntries {
+		sorted = sorted[:MaxLeaderboardEntries]
+	}
+
+	return sorted
+}
+
+// SafeRunes truncates a string to at most maxRunes, preserving Unicode integrity.
+func SafeRunes(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(value) <= maxRunes {
+		return value
+	}
+
+	result := make([]rune, 0, maxRunes)
+	for _, r := range value {
+		if len(result) >= maxRunes {
+			break
+		}
+		result = append(result, r)
+	}
+
+	return string(result)
 }
